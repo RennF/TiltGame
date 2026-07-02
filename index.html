@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>TILTFALL</title>
+<style>
+  :root{
+    --bg:#d4d7d9; --ink:#16181c; --gold:#f2b632; --blood:#a8121f; --panel:#eceeef;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);
+    font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+    touch-action:none;overscroll-behavior:none;user-select:none;-webkit-user-select:none;
+    position:fixed;inset:0}
+  canvas{display:block;width:100%;height:100%}
+  #overlay{position:fixed;inset:0;background:rgba(212,215,217,.96);display:flex;
+    flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:10;
+    text-align:center;padding:24px;color:var(--ink)}
+  #overlay.hidden{display:none}
+  #overlay h1{font-size:clamp(42px,12vw,84px);letter-spacing:.14em;font-weight:800}
+  #overlay h1 span{color:var(--gold)}
+  #overlay .rule{width:64px;height:3px;background:var(--ink)}
+  #overlay p{font-size:12px;letter-spacing:.08em;line-height:1.9;max-width:340px;color:#4a4f55}
+  #overlay p b{color:var(--ink)}
+  #startBtn{margin-top:8px;border:2px solid var(--ink);background:var(--ink);color:var(--bg);
+    font:inherit;font-size:14px;letter-spacing:.25em;padding:14px 34px;cursor:pointer}
+  #startBtn:active{transform:translateY(1px)}
+  #overlay .sub{font-size:10px;color:#7a7f85;letter-spacing:.12em}
+  #stats{display:none;font-size:13px;letter-spacing:.14em;color:var(--ink);line-height:2}
+  #stats b{color:var(--gold)}
+  #rot{position:fixed;inset:0;background:rgba(212,215,217,.97);z-index:60;display:none;
+    flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    color:var(--ink);letter-spacing:.14em;font-weight:700;font-size:14px}
+  #rot .ph{width:34px;height:58px;border:3px solid var(--ink);border-radius:6px;
+    animation:rot 1.6s ease-in-out infinite}
+  @keyframes rot{0%,20%{transform:rotate(0)}60%,100%{transform:rotate(-90deg)}}
+  @media (orientation: landscape){ #rot{display:none !important} }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="rot"><div class="ph"></div>ROTATE TO LANDSCAPE</div>
+<div id="overlay">
+  <h1>TILT<span>FALL</span></h1>
+  <div class="rule"></div>
+  <div id="stats"></div>
+  <p id="howto">
+    <b>TILT PHONE</b> — rotate gravity. flat ground becomes a slope, the ninja runs into the fall.<br>
+    <b>TAP ANYWHERE</b> — jump. slide down walls, tap to kick off, chain wall jumps to climb.<br>
+    <b>PLAY IN LANDSCAPE</b> — the game locks itself when you start.<br>
+    <b>GOLD</b> is optional. the door is not. land too hard and you're paint.
+  </p>
+  <button id="startBtn">TAP TO START</button>
+  <p class="sub">desktop: Q / E tilt · ← → run · space jump · R level gravity</p>
+</div>
+
+<script>
+
+'use strict';
+/* ================================================================
+   TILTFALL — an N-style tilt-gravity platformer
+   world tiles stay fixed; gravity rotates with your phone,
+   so every floor is one tilt away from being a slope, a wall,
+   or a long way down.
+================================================================ */
+
+const TS = 32;                       // tile size
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resize); resize();
+
+/* ---------------- level ---------------- */
+const MAP = [
+"################################################",
+"#..............................................#",
+"#..............................................#",
+"#..........................................#####",
+"#...........................############...#####",
+"#......................................#...#####",
+"#......................................#...#####",
+"#......................................#...#####",
+"#......................................#...#####",
+"#......................................#...#####",
+"#......................................#...#####",
+"#.....####.............................#...#####",
+"#...........................####.......#...#####",
+"#...........................####.......#...#####",
+"#......................................#...#####",
+"#......................................#...#####",
+"#.####.................................#...#####",
+"#......................................#...#####",
+"#......................................#...#####",
+"#......................................#...#####",
+"#.......................########################",
+"#..............................................#",
+"#..............................................#",
+"#..............................................#",
+"#..............................................#",
+"#.............######...........................#",
+"#...........##.................................#",
+"#.........####.................................#",
+"################################################",
+"################################################"
+];
+// normalize map rows to a fixed width (protects against hand-editing slips)
+const MW = 48, MH = MAP.length;
+for (let r = 0; r < MH; r++){
+  let s = MAP[r];
+  if (s.length > MW) s = s.slice(0, MW);
+  while (s.length < MW) s += (r === 0 || r >= MH - 2) ? '#' : '.';
+  // keep the outer border solid
+  s = '#' + s.slice(1, MW - 1) + '#';
+  MAP[r] = s;
+}
+const solidAt = (tx, ty) => (tx < 0 || ty < 0 || tx >= MW || ty >= MH) ? true : MAP[ty][tx] === '#';
+const solidPx = (x, y) => solidAt(Math.floor(x / TS), Math.floor(y / TS));
+
+/* ---------------- palette (N-style: pale field, ink tiles, gold) ---------------- */
+const COL = {
+  bg:'#d4d7d9', grid:'#c9ccce', tile:'#2f333c', tileEdge:'#212429',
+  ink:'#101216', gold:'#f2b632', goldCore:'#fff3d0',
+  blood:'#a8121f', bloodDim:'#7c0d17',
+  drone:'#46536e', droneEye:'#e8ecf2', charger:'#c9372c', chargerHot:'#ff5a3c',
+  plat:'#454b57', ball:'#6a7280',
+  cp:'#9aa0a6', door:'#1c1f26'
+};
+
+/* ---------------- entities ---------------- */
+const T = (x, y) => ({ x: x * TS, y: y * TS });
+
+const SPAWN0 = T(3.5, 27.4);
+
+const golds = [
+  T(5,27.1), T(12.7,25.3),
+  T(15,24.35), T(16.5,24.35), T(18,24.35),
+  T(3.5,15.3), T(7.5,10.3),
+  T(27,19.35), T(31,19.35), T(35,19.35),
+  T(30,11.2), T(32.8,13), T(30,14.8), T(27.2,13),
+  T(41,12), T(41,8),
+  T(30.5,3.3), T(32.5,3.3), T(34.5,3.3)
+].map(p => ({ ...p, got:false, t: Math.random() * 6 }));
+
+const checkpoints = [
+  { ...T(15.5,24.4), on:false },
+  { ...T(37,19.35), on:false }
+];
+
+const exitDoor = { ...T(45,2.15), w:26, h:44 };
+
+const platforms = [
+  { x:T(22,0).x, y:0, w:3*TS, h:12, wps:[T(22,27.3), T(22,21.35)], i:0, sp:66, px:0, py:0 }
+];
+platforms.forEach(p => { p.x = p.wps[0].x; p.y = p.wps[0].y; });
+
+const patrollers = [
+  { wps:[T(26,19.45), T(36,19.45)], i:0, sp:104, x:0, y:0, r:12, fx:1 },
+  { wps:[T(27.2,11.2), T(32.8,11.2), T(32.8,14.8), T(27.2,14.8)], i:0, sp:96, x:0, y:0, r:12, fx:1 }
+];
+patrollers.forEach(e => { e.x = e.wps[0].x; e.y = e.wps[0].y; });
+
+const chargers = [
+  { x:T(35,13).x, y:T(35,13).y, hx:T(35,13).x, hy:T(35,13).y, r:13,
+    state:'idle', t:0, dx:0, dy:0, range:300, bob:Math.random()*6 }
+];
+
+const balls = [
+  { x:T(6,27.3).x,  y:T(6,27.3).y,  vx:0, vy:0, r:9,  rot:0 },
+  { x:T(7.3,27.3).x,y:T(7.3,27.3).y,vx:0, vy:0, r:11, rot:0 },
+  { x:T(8.7,27.3).x,y:T(8.7,27.3).y,vx:0, vy:0, r:8,  rot:0 }
+];
+
+/* ---------------- gravity ---------------- */
+let gAng = 0;                 // 0 = straight down (canvas +y)
+let gTargetAng = 0;
+let usingTilt = false;
+let iosFlip = false;
+const gDir = { x:0, y:1 };    // unit gravity
+const upDir = { x:0, y:-1 };
+
+function shortestAngle(a, b){ let d = (b - a) % (Math.PI*2); if (d > Math.PI) d -= Math.PI*2; if (d < -Math.PI) d += Math.PI*2; return d; }
+
+function orientAngle(){
+  if (screen.orientation && typeof screen.orientation.angle === 'number') return screen.orientation.angle;
+  if (typeof window.orientation === 'number') return window.orientation;
+  return 0;
+}
+let gotMotion = false, lastMotionT = 0, tiltStartT = 0;
+function applyReading(ax, ay){
+  // device frame -> canvas frame (canvas y points down)
+  let gx = -ax, gy = ay;
+  // compensate for screen rotation
+  const r = orientAngle() * Math.PI / 180;
+  const cx = gx * Math.cos(r) + gy * Math.sin(r);
+  const cyv = -gx * Math.sin(r) + gy * Math.cos(r);
+  gx = cx; gy = cyv;
+  const m = Math.hypot(gx, gy);
+  if (m < 1.6) return;        // phone nearly flat: keep previous direction
+  usingTilt = true;
+  gTargetAng = Math.atan2(gx, gy);   // 0 when gravity is straight down-screen
+}
+function onMotion(e){
+  const a = e.accelerationIncludingGravity;
+  if (!a || a.x == null) return;
+  gotMotion = true; lastMotionT = performance.now();
+  let ax = a.x, ay = a.y;
+  if (iosFlip){ ax = -ax; ay = -ay; }
+  applyReading(ax, ay);
+}
+function onOrient(e){
+  // fallback only while devicemotion is silent
+  if (gotMotion && performance.now() - lastMotionT < 1000) return;
+  if (e.beta == null || e.gamma == null) return;
+  const b = e.beta * Math.PI / 180, g = e.gamma * Math.PI / 180;
+  applyReading(-9.81 * Math.sin(g) * Math.cos(b), 9.81 * Math.sin(b));
+}
+function hookMotion(){
+  tiltStartT = performance.now();
+  if (typeof DeviceMotionEvent !== 'undefined' &&
+      typeof DeviceMotionEvent.requestPermission === 'function'){
+    iosFlip = true; // iOS reports the opposite sign of the spec
+    DeviceMotionEvent.requestPermission()
+      .then(s => { if (s === 'granted') window.addEventListener('devicemotion', onMotion); })
+      .catch(()=>{});
+    if (typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission === 'function'){
+      DeviceOrientationEvent.requestPermission()
+        .then(s => { if (s === 'granted') window.addEventListener('deviceorientation', onOrient); })
+        .catch(()=>{});
+    }
+  } else {
+    window.addEventListener('devicemotion', onMotion);
+    window.addEventListener('deviceorientation', onOrient);
+    // Generic Sensor API (Chrome / Android), extra belt-and-braces
+    try {
+      if ('Accelerometer' in window){
+        const s = new Accelerometer({ frequency: 60 });
+        s.addEventListener('reading', () => {
+          if (gotMotion && performance.now() - lastMotionT < 1000) return;
+          applyReading(s.x, s.y);
+        });
+        s.addEventListener('error', ()=>{});
+        s.start();
+      }
+    } catch(err){}
+  }
+}
+
+/* ---------------- audio (tiny synth blips) ---------------- */
+let AC = null;
+function audioInit(){ try{ AC = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){} }
+function blip(f0, f1, dur, type, vol){
+  if (!AC) return;
+  const t = AC.currentTime, o = AC.createOscillator(), g = AC.createGain();
+  o.type = type || 'square';
+  o.frequency.setValueAtTime(f0, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(f1, 1), t + dur);
+  g.gain.setValueAtTime(vol || .12, t);
+  g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+  o.connect(g).connect(AC.destination);
+  o.start(t); o.stop(t + dur + .02);
+}
+function noiseBurst(dur, vol){
+  if (!AC) return;
+  const n = AC.sampleRate * dur, buf = AC.createBuffer(1, n, AC.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random()*2 - 1) * (1 - i/n);
+  const s = AC.createBufferSource(), g = AC.createGain();
+  s.buffer = buf; g.gain.value = vol || .25;
+  s.connect(g).connect(AC.destination); s.start();
+}
+const sJump = () => blip(300, 720, .12, 'square', .08);
+const sWall = () => blip(220, 560, .1, 'square', .08);
+const sGold = () => { blip(1180, 1750, .09, 'sine', .12); blip(1760, 2350, .12, 'sine', .07); };
+const sCp   = () => { blip(520, 1040, .16, 'triangle', .12); };
+const sDie  = () => { noiseBurst(.28, .3); blip(180, 40, .3, 'sawtooth', .18); };
+const sWin  = () => { blip(520,520,.1,'square',.1); setTimeout(()=>blip(660,660,.1,'square',.1),110); setTimeout(()=>blip(880,1320,.25,'square',.12),220); };
+
+/* ---------------- input ---------------- */
+const input = { move:0, jumpBuf:0, jumpHeld:false };
+const keys = {};
+window.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  keys[e.code] = true;
+  if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW'){ input.jumpBuf = .13; input.jumpHeld = true; }
+  if (e.code === 'KeyR') gTargetAng = 0;
+});
+window.addEventListener('keyup', e => {
+  keys[e.code] = false;
+  if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') input.jumpHeld = false;
+});
+
+const jumpTouches = new Set();
+
+cv.addEventListener('touchstart', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches){
+    jumpTouches.add(t.identifier);
+  }
+  input.jumpBuf = .13; input.jumpHeld = true;
+}, { passive:false });
+function touchEnd(e){
+  for (const t of e.changedTouches) jumpTouches.delete(t.identifier);
+  if (jumpTouches.size === 0) input.jumpHeld = false;
+}
+cv.addEventListener('touchend', touchEnd);
+cv.addEventListener('touchcancel', touchEnd);
+
+function readInput(dt){
+  let m = 0;
+  if (keys['ArrowLeft'] || keys['KeyA']) m -= 1;
+  if (keys['ArrowRight'] || keys['KeyD']) m += 1;
+  input.move = Math.max(-1, Math.min(1, m));
+  if (keys['KeyQ']) gTargetAng -= 2.1 * dt;
+  if (keys['KeyE']) gTargetAng += 2.1 * dt;
+  input.jumpBuf = Math.max(0, input.jumpBuf - dt);
+}
+
+/* ---------------- player ---------------- */
+const P = {
+  x:SPAWN0.x, y:SPAWN0.y, vx:0, vy:0, r:10,
+  grounded:false, groundN:{x:0,y:-1}, coyote:0,
+  wallN:null, wallCoyote:0, wallStick:null,
+  dead:false, deadT:0, won:false,
+  spawnX:SPAWN0.x, spawnY:SPAWN0.y,
+  runPhase:0, squash:0, faceDir:1, landFlash:0
+};
+const PHYS = {
+  G:1500, RUN:265, ACC_G:2900, ACC_A:980, AIR_MAX:265,
+  FRIC:6.5, JUMP:520, WJ_OUT:330, WJ_UP:430,
+  SLIDE:130, TERM:980, DEATH_V:760
+};
+let goldCount = 0, deaths = 0, levelTime = 0, running = false;
+let shake = 0, hintTiltT = 0;
+
+/* ---------------- collision helpers ---------------- */
+function collideCircleWorld(b, restitution){
+  // returns { impact, contacts:[{nx,ny}], onPlat }
+  let impact = 0; const contacts = []; let onPlat = null;
+  for (let pass = 0; pass < 2; pass++){
+    const tx0 = Math.floor((b.x - b.r) / TS), tx1 = Math.floor((b.x + b.r) / TS);
+    const ty0 = Math.floor((b.y - b.r) / TS), ty1 = Math.floor((b.y + b.r) / TS);
+    for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++){
+      if (!solidAt(tx, ty)) continue;
+      resolveAABB(b, tx*TS, ty*TS, TS, TS, restitution, contacts, v => impact = Math.max(impact, v));
+    }
+    for (const pl of platforms){
+      const hit = resolveAABB(b, pl.x - pl.w/2, pl.y - pl.h/2, pl.w, pl.h, restitution, contacts, v => impact = Math.max(impact, v));
+      if (hit && (hit.nx * upDir.x + hit.ny * upDir.y) > 0.5) onPlat = pl;
+    }
+  }
+  return { impact, contacts, onPlat };
+}
+function resolveAABB(b, rx, ry, rw, rh, rest, contacts, onImpact){
+  const cx = Math.max(rx, Math.min(b.x, rx + rw));
+  const cy = Math.max(ry, Math.min(b.y, ry + rh));
+  let dx = b.x - cx, dy = b.y - cy;
+  let d = Math.hypot(dx, dy);
+  let nx, ny;
+  if (d > b.r) return null;
+  if (d < 1e-4){
+    // center inside: push out along the smallest axis
+    const l = b.x - rx, r = rx + rw - b.x, t = b.y - ry, bo = ry + rh - b.y;
+    const m = Math.min(l, r, t, bo);
+    if (m === l){ nx = -1; ny = 0; d = -l; } else if (m === r){ nx = 1; ny = 0; d = -r; }
+    else if (m === t){ nx = 0; ny = -1; d = -t; } else { nx = 0; ny = 1; d = -bo; }
+    b.x += nx * (b.r - d); b.y += ny * (b.r - d);
+  } else {
+    nx = dx / d; ny = dy / d;
+    b.x += nx * (b.r - d); b.y += ny * (b.r - d);
+  }
+  const vn = b.vx * nx + b.vy * ny;
+  if (vn < 0){
+    onImpact(-vn);
+    const k = 1 + (rest || 0);
+    b.vx -= vn * nx * k; b.vy -= vn * ny * k;
+  }
+  const c = { nx, ny };
+  contacts.push(c);
+  return c;
+}
+function raycastClear(x0, y0, x1, y1){
+  const d = Math.hypot(x1 - x0, y1 - y0), n = Math.ceil(d / 10);
+  for (let i = 1; i < n; i++){
+    const t = i / n;
+    if (solidPx(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)) return false;
+  }
+  return true;
+}
+
+/* ---------------- gore ---------------- */
+const gibs = [], splats = [];
+function explode(x, y, vx, vy){
+  sDie(); shake = 14;
+  for (let i = 0; i < 9; i++){
+    const a = Math.random() * Math.PI * 2, s = 120 + Math.random() * 340;
+    gibs.push({ x, y, vx:vx*.35 + Math.cos(a)*s, vy:vy*.35 + Math.sin(a)*s,
+      w:3 + Math.random()*5, h:2 + Math.random()*4, rot:Math.random()*7, vr:(Math.random()-.5)*18,
+      life:2.4, kind:'gib' });
+  }
+  for (let i = 0; i < 22; i++){
+    const a = Math.random() * Math.PI * 2, s = 60 + Math.random() * 420;
+    gibs.push({ x, y, vx:vx*.4 + Math.cos(a)*s, vy:vy*.4 + Math.sin(a)*s,
+      w:1.5 + Math.random()*2.5, life:1.6 + Math.random(), kind:'blood' });
+  }
+}
+function stepGibs(dt){
+  for (let i = gibs.length - 1; i >= 0; i--){
+    const g = gibs[i];
+    g.vx += gDir.x * PHYS.G * dt; g.vy += gDir.y * PHYS.G * dt;
+    const nx = g.x + g.vx * dt, ny = g.y + g.vy * dt;
+    if (solidPx(nx, g.y)){ g.vx *= -.35; if (g.kind === 'blood') stainAt(nx, g.y, g); }
+    else g.x = nx;
+    if (solidPx(g.x, ny)){ g.vy *= -.35; g.vx *= .8; if (g.kind === 'blood') stainAt(g.x, ny, g); }
+    else g.y = ny;
+    if (g.rot != null) g.rot += g.vr * dt;
+    g.life -= dt;
+    if (g.life <= 0) gibs.splice(i, 1);
+  }
+}
+function stainAt(x, y, g){
+  if (splats.length > 220) splats.shift();
+  splats.push({ x, y, r:1.5 + Math.random()*3.5 });
+  if (Math.random() < .6) g.life = Math.min(g.life, .12);
+}
+
+/* ---------------- death / respawn / win ---------------- */
+function killPlayer(){
+  if (P.dead || P.won) return;
+  P.dead = true; P.deadT = 0; deaths++;
+  explode(P.x, P.y, P.vx, P.vy);
+}
+function respawn(){
+  P.dead = false; P.x = P.spawnX; P.y = P.spawnY; P.vx = 0; P.vy = 0;
+  P.coyote = 0; P.wallCoyote = 0; P.squash = 0;
+}
+function win(){
+  if (P.won) return;
+  P.won = true; running = false; sWin();
+  const st = document.getElementById('stats');
+  st.style.display = 'block';
+  st.innerHTML = 'LEVEL COMPLETE<br>gold <b>' + goldCount + ' / ' + golds.length + '</b> · time ' +
+    levelTime.toFixed(1) + 's · deaths ' + deaths;
+  document.getElementById('howto').style.display = 'none';
+  document.getElementById('startBtn').textContent = 'RUN IT AGAIN';
+  document.getElementById('overlay').classList.remove('hidden');
+}
+function resetLevel(){
+  golds.forEach(g => g.got = false);
+  checkpoints.forEach(c => c.on = false);
+  goldCount = 0; deaths = 0; levelTime = 0;
+  splats.length = 0; gibs.length = 0;
+  P.spawnX = SPAWN0.x; P.spawnY = SPAWN0.y; P.won = false;
+  balls[0].x = T(6,27.3).x;  balls[0].y = T(6,27.3).y;  balls[0].vx = balls[0].vy = 0;
+  balls[1].x = T(7.3,27.3).x;balls[1].y = T(7.3,27.3).y;balls[1].vx = balls[1].vy = 0;
+  balls[2].x = T(8.7,27.3).x;balls[2].y = T(8.7,27.3).y;balls[2].vx = balls[2].vy = 0;
+  chargers.forEach(c => { c.state = 'idle'; c.x = c.hx; c.y = c.hy; c.t = 0; });
+  respawn();
+}
+
+/* ---------------- simulation ---------------- */
+function step(dt){
+  levelTime += dt;
+  hintTiltT += dt;
+
+  // gravity easing toward tilt target
+  gAng += shortestAngle(gAng, gTargetAng) * Math.min(1, dt * 9);
+  gDir.x = Math.sin(gAng); gDir.y = Math.cos(gAng);
+  upDir.x = -gDir.x; upDir.y = -gDir.y;
+
+  readInput(dt);
+
+  // moving platforms
+  for (const pl of platforms){
+    const w = pl.wps[pl.i], dx = w.x - pl.x, dy = w.y - pl.y, d = Math.hypot(dx, dy);
+    const mv = pl.sp * dt;
+    if (d <= mv){ pl.px = dx; pl.py = dy; pl.x = w.x; pl.y = w.y; pl.i = (pl.i + 1) % pl.wps.length; }
+    else { pl.px = dx / d * mv; pl.py = dy / d * mv; pl.x += pl.px; pl.y += pl.py; }
+  }
+
+  // balls: dumb happy physics props
+  for (const b of balls){
+    b.vx += gDir.x * PHYS.G * dt; b.vy += gDir.y * PHYS.G * dt;
+    b.vx *= (1 - .3 * dt); b.vy *= (1 - .05 * dt);
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    collideCircleWorld(b, .3);
+    b.rot += b.vx * dt / b.r;
+    // player nudges balls
+    const dx = b.x - P.x, dy = b.y - P.y, rr = b.r + P.r, d = Math.hypot(dx, dy);
+    if (d < rr && d > 0){ b.vx += dx / d * 160 * dt * 8; b.vy += dy / d * 160 * dt * 8; }
+  }
+
+  if (P.dead){
+    P.deadT += dt;
+    stepGibs(dt);
+    if (P.deadT > 1.0) respawn();
+    stepEnemies(dt);
+    return;
+  }
+  stepGibs(dt);
+
+  /* --- player physics --- */
+  P.vx += gDir.x * PHYS.G * dt;
+  P.vy += gDir.y * PHYS.G * dt;
+
+  const rx = -upDir.y, ry = upDir.x;                    // "right" relative to gravity
+  const m = input.move;
+  if (m !== 0) P.faceDir = m > 0 ? 1 : -1;
+
+  if (P.grounded){
+    // move along the ground tangent; gravity's tangential pull stays untouched,
+    // so a tilted floor drags you downslope on its own.
+    const n = P.groundN;
+    let tx = n.ny, ty = -n.nx;           // tangent = rot90(normal)
+    if (tx * rx + ty * ry < 0){ tx = -tx; ty = -ty; }
+    const vt = P.vx * tx + P.vy * ty;
+    // tilt IS the throttle: the downslope component of gravity becomes run input,
+    // so tipping the world makes the ninja sprint into the fall.
+    const gt = gDir.x * tx + gDir.y * ty;
+    let em = Math.max(-1, Math.min(1, m + gt * 3.4));
+    if (Math.abs(em) < .12) em = 0;
+    if (em !== 0){
+      P.faceDir = em > 0 ? 1 : -1;
+      if (!(vt * em > 0 && Math.abs(vt) > PHYS.RUN * Math.abs(em))){
+        P.vx += tx * em * PHYS.ACC_G * dt;
+        P.vy += ty * em * PHYS.ACC_G * dt;
+      }
+    }
+    // rolling friction on the tangential part (gravity keeps feeding slope-slide)
+    const f = Math.min(1, PHYS.FRIC * dt) * (m === 0 ? 1 : .25);
+    P.vx -= tx * vt * f; P.vy -= ty * vt * f;
+    P.runPhase += Math.abs(vt) * dt * .06;
+  } else {
+    // air control
+    const vr = P.vx * rx + P.vy * ry;
+    if (m !== 0 && !(vr * m > 0 && Math.abs(vr) > PHYS.AIR_MAX)){
+      P.vx += rx * m * PHYS.ACC_A * dt;
+      P.vy += ry * m * PHYS.ACC_A * dt;
+    }
+  }
+
+  // wall slide
+  if (P.wallStick && !P.grounded){
+    const vg = P.vx * gDir.x + P.vy * gDir.y;
+    if (vg > PHYS.SLIDE){
+      const red = Math.min(vg - PHYS.SLIDE, 5200 * dt);
+      P.vx -= gDir.x * red; P.vy -= gDir.y * red;
+    }
+  }
+
+  // terminal velocity along gravity
+  {
+    const vg = P.vx * gDir.x + P.vy * gDir.y;
+    if (vg > PHYS.TERM){ P.vx -= gDir.x * (vg - PHYS.TERM); P.vy -= gDir.y * (vg - PHYS.TERM); }
+  }
+
+  // jumping
+  if (input.jumpBuf > 0){
+    if (P.grounded || P.coyote > 0){
+      const vup = P.vx * upDir.x + P.vy * upDir.y;
+      P.vx += upDir.x * (PHYS.JUMP - Math.max(vup, 0));
+      P.vy += upDir.y * (PHYS.JUMP - Math.max(vup, 0));
+      P.grounded = false; P.coyote = 0; input.jumpBuf = 0; P.squash = -.28; sJump();
+    } else if (P.wallCoyote > 0 && P.wallN){
+      const wn = P.wallN;
+      const vup0 = P.vx * upDir.x + P.vy * upDir.y;
+      // strip old velocity, kick out + up
+      P.vx = wn.nx * PHYS.WJ_OUT + upDir.x * (PHYS.WJ_UP + Math.max(vup0, 0) * .2);
+      P.vy = wn.ny * PHYS.WJ_OUT + upDir.y * (PHYS.WJ_UP + Math.max(vup0, 0) * .2);
+      P.wallCoyote = 0; input.jumpBuf = 0; P.squash = -.24;
+      P.faceDir = (wn.nx * rx + wn.ny * ry) > 0 ? 1 : -1;
+      sWall();
+    }
+  }
+  // variable jump: release to cut rise
+  if (!input.jumpHeld){
+    const vup = P.vx * upDir.x + P.vy * upDir.y;
+    if (vup > 160){
+      const cut = (vup - 160) * Math.min(1, 12 * dt);
+      P.vx -= upDir.x * cut * .5; P.vy -= upDir.y * cut * .5;
+    }
+  }
+
+  // integrate + collide
+  P.x += P.vx * dt; P.y += P.vy * dt;
+  const res = collideCircleWorld(P, 0);
+
+  if (res.impact > PHYS.DEATH_V){ killPlayer(); return; }
+  if (res.impact > 420){ P.squash = .35; shake = Math.max(shake, 4); }
+
+  const wasGrounded = P.grounded;
+  P.grounded = false; P.wallStick = null;
+  for (const c of res.contacts){
+    const du = c.nx * upDir.x + c.ny * upDir.y;
+    if (du > .4){ P.grounded = true; P.groundN = c; }
+    else if (Math.abs(du) <= .75){ P.wallStick = c; P.wallN = c; P.wallCoyote = .12; }
+  }
+  if (P.grounded){ P.coyote = .09; if (!wasGrounded) P.landFlash = .12; }
+  else P.coyote = Math.max(0, P.coyote - dt);
+  P.wallCoyote = Math.max(0, P.wallCoyote - dt);
+  P.landFlash = Math.max(0, P.landFlash - dt);
+  P.squash *= Math.pow(.001, dt);
+
+  // ride moving platform
+  if (res.onPlat){ P.x += res.onPlat.px; P.y += res.onPlat.py; }
+
+  // world hazards & pickups
+  for (const g of golds){
+    if (g.got) continue;
+    if (Math.hypot(g.x - P.x, g.y - P.y) < 22){ g.got = true; goldCount++; sGold(); }
+  }
+  for (const c of checkpoints){
+    if (!c.on && Math.hypot(c.x - P.x, c.y - P.y) < 30){
+      c.on = true; P.spawnX = c.x; P.spawnY = c.y - 6; sCp();
+    }
+  }
+  if (Math.abs(P.x - exitDoor.x) < exitDoor.w * .6 && Math.abs(P.y - exitDoor.y) < exitDoor.h * .62) win();
+
+  stepEnemies(dt);
+
+  // enemy contact = death
+  if (!P.dead){
+    for (const e of patrollers){
+      if (Math.hypot(e.x - P.x, e.y - P.y) < e.r + P.r - 2){ killPlayer(); return; }
+    }
+    for (const e of chargers){
+      if (Math.hypot(e.x - P.x, e.y - P.y) < e.r + P.r - 2){ killPlayer(); return; }
+    }
+  }
+}
+
+function stepEnemies(dt){
+  for (const e of patrollers){
+    const w = e.wps[e.i], dx = w.x - e.x, dy = w.y - e.y, d = Math.hypot(dx, dy);
+    const mv = e.sp * dt;
+    if (d <= mv){ e.x = w.x; e.y = w.y; e.i = (e.i + 1) % e.wps.length; }
+    else { e.x += dx / d * mv; e.y += dy / d * mv; if (Math.abs(dx) > 1) e.fx = dx > 0 ? 1 : -1; }
+  }
+  for (const e of chargers){
+    e.bob += dt;
+    e.t -= dt;
+    if (e.state === 'idle'){
+      const d = Math.hypot(P.x - e.x, P.y - e.y);
+      if (!P.dead && d < e.range && raycastClear(e.x, e.y, P.x, P.y)){
+        e.state = 'windup'; e.t = .42;
+        const inv = 1 / Math.max(d, 1);
+        e.dx = (P.x - e.x) * inv; e.dy = (P.y - e.y) * inv;
+      }
+    } else if (e.state === 'windup'){
+      if (e.t <= 0){ e.state = 'dash'; e.t = .62; }
+    } else if (e.state === 'dash'){
+      const sp = 640;
+      const nx = e.x + e.dx * sp * dt, ny = e.y + e.dy * sp * dt;
+      if (solidPx(nx + e.dx * e.r, ny + e.dy * e.r)){ e.state = 'cool'; e.t = .9; shake = Math.max(shake, 3); }
+      else { e.x = nx; e.y = ny; if (e.t <= 0){ e.state = 'cool'; e.t = .9; } }
+    } else { // cool -> drift home
+      const dx = e.hx - e.x, dy = e.hy - e.y, d = Math.hypot(dx, dy);
+      if (d > 2){ e.x += dx / d * 90 * dt; e.y += dy / d * 90 * dt; }
+      else if (e.t <= 0) e.state = 'idle';
+    }
+  }
+}
+
+/* ---------------- camera & render ---------------- */
+const cam = { x:SPAWN0.x, y:SPAWN0.y };
+function draw(){
+  // camera
+  const lookX = P.x + P.vx * .14, lookY = P.y + P.vy * .14;
+  cam.x += (lookX - cam.x) * .10; cam.y += (lookY - cam.y) * .10;
+  const worldW = MW * TS, worldH = MH * TS;
+  const clampCam = (v, half, size) => size <= half * 2 ? size / 2 : Math.max(half, Math.min(size - half, v));
+  const cx = clampCam(cam.x, W / 2, worldW);
+  const cy = clampCam(cam.y, H / 2, worldH);
+  const sx = (shake > 0 ? (Math.random()-.5) * shake : 0);
+  const sy = (shake > 0 ? (Math.random()-.5) * shake : 0);
+  shake = Math.max(0, shake - .8);
+
+  ctx.fillStyle = COL.bg; ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  ctx.translate(Math.round(W/2 - cx + sx), Math.round(H/2 - cy + sy));
+
+  // faint grid
+  ctx.strokeStyle = COL.grid; ctx.lineWidth = 1;
+  const gx0 = Math.floor((cx - W/2) / TS) * TS, gx1 = cx + W/2;
+  const gy0 = Math.floor((cy - H/2) / TS) * TS, gy1 = cy + H/2;
+  ctx.beginPath();
+  for (let x = gx0; x <= gx1; x += TS){ ctx.moveTo(x, gy0); ctx.lineTo(x, gy1); }
+  for (let y = gy0; y <= gy1; y += TS){ ctx.moveTo(gx0, y); ctx.lineTo(gx1, y); }
+  ctx.stroke();
+
+  // splats (under everything else but over grid)
+  ctx.fillStyle = COL.bloodDim;
+  for (const s of splats){ ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 7); ctx.fill(); }
+
+  // tiles
+  const tx0 = Math.max(0, Math.floor((cx - W/2) / TS) - 1), tx1 = Math.min(MW - 1, Math.ceil((cx + W/2) / TS));
+  const ty0 = Math.max(0, Math.floor((cy - H/2) / TS) - 1), ty1 = Math.min(MH - 1, Math.ceil((cy + H/2) / TS));
+  ctx.fillStyle = COL.tile;
+  for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++)
+    if (solidAt(tx, ty)) ctx.fillRect(tx*TS, ty*TS, TS, TS);
+  // edge lines where tile meets air (N-style crisp outline)
+  ctx.strokeStyle = COL.tileEdge; ctx.lineWidth = 2; ctx.beginPath();
+  for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++){
+    if (!solidAt(tx, ty)) continue;
+    const x = tx*TS, y = ty*TS;
+    if (!solidAt(tx, ty-1)){ ctx.moveTo(x, y+1); ctx.lineTo(x+TS, y+1); }
+    if (!solidAt(tx, ty+1)){ ctx.moveTo(x, y+TS-1); ctx.lineTo(x+TS, y+TS-1); }
+    if (!solidAt(tx-1, ty)){ ctx.moveTo(x+1, y); ctx.lineTo(x+1, y+TS); }
+    if (!solidAt(tx+1, ty)){ ctx.moveTo(x+TS-1, y); ctx.lineTo(x+TS-1, y+TS); }
+  }
+  ctx.stroke();
+
+  // moving platforms
+  for (const pl of platforms){
+    ctx.fillStyle = COL.plat;
+    ctx.fillRect(pl.x - pl.w/2, pl.y - pl.h/2, pl.w, pl.h);
+    ctx.fillStyle = COL.tileEdge;
+    ctx.fillRect(pl.x - pl.w/2, pl.y - pl.h/2, pl.w, 2);
+    ctx.fillStyle = COL.gold;
+    ctx.fillRect(pl.x - 3, pl.y - 2, 6, 4);
+  }
+
+  // checkpoints
+  for (const c of checkpoints){
+    ctx.fillStyle = c.on ? COL.gold : COL.cp;
+    ctx.fillRect(c.x - 2, c.y - 14, 4, 26);
+    ctx.beginPath(); ctx.arc(c.x, c.y - 17, c.on ? 6 : 4, 0, 7); ctx.fill();
+    if (c.on){
+      ctx.strokeStyle = 'rgba(242,182,50,.4)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(c.x, c.y - 17, 10 + Math.sin(performance.now()/300)*2, 0, 7); ctx.stroke();
+    }
+  }
+
+  // exit door
+  {
+    const d = exitDoor;
+    ctx.fillStyle = COL.door;
+    ctx.fillRect(d.x - d.w/2, d.y - d.h/2, d.w, d.h);
+    ctx.strokeStyle = COL.gold; ctx.lineWidth = 2;
+    ctx.strokeRect(d.x - d.w/2 + 2, d.y - d.h/2 + 2, d.w - 4, d.h - 4);
+    ctx.fillStyle = COL.gold;
+    ctx.beginPath(); ctx.arc(d.x + d.w/4 - 2, d.y, 2.5, 0, 7); ctx.fill();
+  }
+
+  // gold diamonds
+  for (const g of golds){
+    if (g.got) continue;
+    g.t += .04;
+    const p = 1 + Math.sin(g.t) * .12;
+    ctx.save(); ctx.translate(g.x, g.y); ctx.rotate(Math.PI/4); ctx.scale(p, p);
+    ctx.fillStyle = COL.gold; ctx.fillRect(-5.5, -5.5, 11, 11);
+    ctx.fillStyle = COL.goldCore; ctx.fillRect(-2.4, -2.4, 4.8, 4.8);
+    ctx.restore();
+  }
+
+  // balls
+  for (const b of balls){
+    ctx.fillStyle = COL.ball;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 7); ctx.fill();
+    ctx.strokeStyle = COL.tileEdge; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r - 1, 0, 7); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,.35)';
+    ctx.beginPath(); ctx.moveTo(b.x, b.y);
+    ctx.lineTo(b.x + Math.cos(b.rot) * (b.r - 3), b.y + Math.sin(b.rot) * (b.r - 3)); ctx.stroke();
+  }
+
+  // patrol drones (N-style rounded squares with an eye)
+  for (const e of patrollers){
+    ctx.fillStyle = COL.drone;
+    rr(e.x - 11, e.y - 11, 22, 22, 6); ctx.fill();
+    ctx.strokeStyle = COL.tileEdge; ctx.lineWidth = 2;
+    rr(e.x - 11, e.y - 11, 22, 22, 6); ctx.stroke();
+    ctx.fillStyle = COL.droneEye;
+    ctx.beginPath(); ctx.arc(e.x + e.fx * 3, e.y - 1, 4.5, 0, 7); ctx.fill();
+    ctx.fillStyle = COL.ink;
+    ctx.beginPath(); ctx.arc(e.x + e.fx * 4.5, e.y - 1, 2, 0, 7); ctx.fill();
+  }
+
+  // chargers (spiky mines)
+  for (const e of chargers){
+    const hot = e.state === 'windup' && (Math.floor(performance.now()/70) % 2 === 0);
+    const c = e.state === 'dash' || hot ? COL.chargerHot : COL.charger;
+    const bob = e.state === 'idle' ? Math.sin(e.bob * 3) * 3 : 0;
+    ctx.save(); ctx.translate(e.x, e.y + bob);
+    ctx.fillStyle = c;
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++){
+      const a = i / 8 * Math.PI * 2 + e.bob * (e.state === 'dash' ? 6 : 1.2);
+      const rad = i % 2 ? e.r + 5 : e.r - 2;
+      ctx[i ? 'lineTo' : 'moveTo'](Math.cos(a) * rad, Math.sin(a) * rad);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(0, 0, 3.4, 0, 7); ctx.fill();
+    ctx.restore();
+  }
+
+  // gibs & blood
+  for (const g of gibs){
+    if (g.kind === 'blood'){
+      ctx.fillStyle = COL.blood;
+      ctx.beginPath(); ctx.arc(g.x, g.y, g.w, 0, 7); ctx.fill();
+    } else {
+      ctx.save(); ctx.translate(g.x, g.y); ctx.rotate(g.rot);
+      ctx.fillStyle = COL.ink; ctx.fillRect(-g.w/2, -g.h/2, g.w, g.h);
+      ctx.restore();
+    }
+  }
+
+  // player (little ink ninja, oriented to gravity)
+  if (!P.dead) drawPlayer();
+
+  ctx.restore();
+  drawHUD();
+}
+function rr(x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function drawPlayer(){
+  ctx.save();
+  ctx.translate(P.x, P.y);
+  ctx.rotate(gAng);                              // stand relative to gravity
+  const sq = P.squash;                           // <0 stretch (jump), >0 squash (land)
+  ctx.scale(1 + sq * .8, 1 - sq * .8);
+  const vt = (P.vx * -upDir.y + P.vy * upDir.x); // rightward speed
+  const lean = Math.max(-.4, Math.min(.4, vt / 600));
+  ctx.rotate(lean);
+  ctx.fillStyle = COL.ink;
+  // legs
+  const run = P.grounded && Math.abs(vt) > 30 ? Math.sin(P.runPhase * 10) : 0;
+  ctx.lineWidth = 3; ctx.strokeStyle = COL.ink; ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(0, 4); ctx.lineTo(-3 + run * 4, 11);
+  ctx.moveTo(0, 4); ctx.lineTo(3 - run * 4, 11);
+  ctx.stroke();
+  // body
+  rr(-4.5, -9, 9, 15, 4.5); ctx.fill();
+  // head
+  ctx.beginPath(); ctx.arc(0, -10.5, 4.5, 0, 7); ctx.fill();
+  // eye band
+  ctx.fillStyle = '#cfd3d6';
+  ctx.fillRect(P.faceDir > 0 ? -1 : -3.6, -12, 4.6, 2.4);
+  ctx.fillStyle = COL.ink;
+  ctx.restore();
+}
+
+/* ---------------- HUD ---------------- */
+function drawHUD(){
+  ctx.save();
+  ctx.font = '700 13px ui-monospace, Menlo, monospace';
+  ctx.textBaseline = 'middle';
+  // gold counter
+  ctx.save(); ctx.translate(20, 26); ctx.rotate(Math.PI/4);
+  ctx.fillStyle = COL.gold; ctx.fillRect(-5, -5, 10, 10);
+  ctx.fillStyle = COL.goldCore; ctx.fillRect(-2, -2, 4, 4);
+  ctx.restore();
+  ctx.fillStyle = COL.ink;
+  ctx.fillText(goldCount + '/' + golds.length, 34, 27);
+  // timer + deaths
+  ctx.textAlign = 'right';
+  ctx.fillText(levelTime.toFixed(1) + 's  ×' + deaths, W - 16, 27);
+  ctx.textAlign = 'left';
+
+  // gravity dial (the signature): fixed ring, falling needle
+  const dx = W / 2, dy = 30;
+  ctx.strokeStyle = COL.ink; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(dx, dy, 14, 0, 7); ctx.stroke();
+  ctx.fillStyle = COL.blood;
+  ctx.save(); ctx.translate(dx, dy); ctx.rotate(Math.atan2(gDir.x, -gDir.y));
+  ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(4, -5); ctx.lineTo(-4, -5); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  if (!usingTilt && hintTiltT < 12 && running){
+    ctx.fillStyle = 'rgba(16,18,22,.55)'; ctx.textAlign = 'center';
+    ctx.fillText('tilt to run \u00b7 tap to jump', dx, dy + 30);
+    ctx.textAlign = 'left';
+  }
+
+  // sensor diagnostic: touch device, running, but no tilt data arriving
+  if ('ontouchstart' in window && running && !usingTilt &&
+      tiltStartT && performance.now() - tiltStartT > 3000){
+    ctx.fillStyle = 'rgba(168,18,31,.85)'; ctx.textAlign = 'center';
+    ctx.font = '600 13px ui-monospace, monospace';
+    ctx.fillText('NO TILT DATA', W / 2, H - 64);
+    ctx.fillStyle = 'rgba(16,18,22,.6)';
+    ctx.font = '11px ui-monospace, monospace';
+    ctx.fillText('open this file over HTTPS (not file:// or an app preview)', W / 2, H - 46);
+    ctx.fillText('chrome \u2192 site settings \u2192 motion sensors \u2192 allow', W / 2, H - 30);
+    ctx.textAlign = 'left';
+  }
+
+  // death flash
+  if (P.dead){
+    ctx.fillStyle = 'rgba(168,18,31,' + Math.max(0, .25 - P.deadT * .3) + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
+  ctx.restore();
+}
+
+/* ---------------- main loop ---------------- */
+let last = performance.now(), acc = 0;
+const STEP = 1 / 120;
+function frame(now){
+  requestAnimationFrame(frame);
+  let dt = (now - last) / 1000; last = now;
+  if (dt > .25) dt = .25;
+  if (running){
+    acc += dt;
+    let n = 0;
+    while (acc >= STEP && n < 8){ step(STEP); acc -= STEP; n++; }
+    if (n === 8) acc = 0;
+  }
+  draw();
+}
+requestAnimationFrame(frame);
+
+/* ---------------- start ---------------- */
+document.getElementById('startBtn').addEventListener('click', () => {
+  audioInit();
+  hookMotion();
+  // go fullscreen + lock landscape (Android needs fullscreen first)
+  const el = document.documentElement;
+  const lock = () => { try { screen.orientation.lock('landscape').catch(()=>{}); } catch(e){} };
+  if (el.requestFullscreen) el.requestFullscreen().then(lock).catch(lock); else lock();
+  document.getElementById('overlay').classList.add('hidden');
+  document.getElementById('rot').style.display = 'flex';
+  resetLevel();
+  running = true;
+  last = performance.now();
+});
+
+</script>
+</body>
+</html>
