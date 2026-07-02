@@ -59,7 +59,6 @@
 </div>
 
 <script>
-
 'use strict';
 /* ================================================================
    TILTFALL — an N-style tilt-gravity platformer
@@ -80,8 +79,34 @@ function resize(){
 }
 window.addEventListener('resize', resize); resize();
 
-/* ---------------- level ---------------- */
-const MAP = [
+/* ---------------- level toolkit ---------------- */
+const T = (x, y) => ({ x: x * TS, y: y * TS });
+const t = TS;
+function grid(gw, gh){
+  const g = Array.from({ length: gh }, () => Array(gw).fill('.'));
+  return {
+    fill(x0, y0, x1, y1, ch){ ch = ch || '#';
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++)
+        if (y >= 0 && y < gh && x >= 0 && x < gw) g[y][x] = ch; },
+    clear(x0, y0, x1, y1){ this.fill(x0, y0, x1, y1, '.'); },
+    border(){ this.fill(0,0,gw-1,0); this.fill(0,gh-1,gw-1,gh-1); this.fill(0,0,0,gh-1); this.fill(gw-1,0,gw-1,gh-1); },
+    rows(){ return g.map(r => r.join('')); }
+  };
+}
+function ring(cx, cy, R, n, a0, a1){ // gold arcs around planetoids
+  const out = [];
+  for (let i = 0; i < n; i++){
+    const a = a0 + (a1 - a0) * (n === 1 ? 0 : i / (n - 1));
+    out.push({ x: cx + Math.cos(a) * R, y: cy + Math.sin(a) * R });
+  }
+  return out;
+}
+/* ---------------- levels ---------------- */
+const LEVELS = [];
+
+/* L1 PRIMER: the original run, now with teeth and a locked door */
+LEVELS.push(Object.assign(function(){
+  const map = [
 "################################################",
 "#..............................................#",
 "#..............................................#",
@@ -112,17 +137,200 @@ const MAP = [
 "#.........####.................................#",
 "################################################",
 "################################################"
-];
-// normalize map rows to a fixed width (protects against hand-editing slips)
-const MW = 48, MH = MAP.length;
-for (let r = 0; r < MH; r++){
-  let s = MAP[r];
-  if (s.length > MW) s = s.slice(0, MW);
-  while (s.length < MW) s += (r === 0 || r >= MH - 2) ? '#' : '.';
-  // keep the outer border solid
-  s = '#' + s.slice(1, MW - 1) + '#';
-  MAP[r] = s;
-}
+  ];
+  return {
+    map, spawn: T(3.5, 27.4),
+    exit: { ...T(45, 2.15), w:26, h:44, id:'d1' },
+    golds: [
+      T(5,27.1), T(12.7,25.3), T(15,24.35), T(16.5,24.35), T(18,24.35),
+      T(3.5,15.3), T(7.5,10.3), T(27,19.35), T(31,19.35), T(35,19.35),
+      T(30,11.2), T(32.8,13), T(30,14.8), T(27.2,13),
+      T(41,12), T(41,8), T(30.5,3.3), T(32.5,3.3), T(34.5,3.3)
+    ],
+    checkpoints: [ T(15.5,24.4), T(37,19.35) ],
+    platforms: [ { w:3*t, h:12, wps:[T(22,27.3), T(22,21.35)], sp:66 } ],
+    patrollers: [
+      { wps:[T(26,19.45), T(36,19.45)], sp:104, r:12 },
+      { wps:[T(27.2,11.2), T(32.8,11.2), T(32.8,14.8), T(27.2,14.8)], sp:96, r:12 }
+    ],
+    chargers: [ { x:T(35,13).x, y:T(35,13).y, r:13, range:300 } ],
+    balls: [ { ...T(6,27.3), r:9 }, { ...T(7.3,27.3), r:11 }, { ...T(8.7,27.3), r:8 } ],
+    spikes: [ { x:30*t, y:27.45*t, w:4*t, h:.55*t } ],
+    pads: [ { x:10.4*t, y:27.5*t, w:1.7*t, h:.5*t, dx:.3, dy:-.954, pow:720 } ],
+    buttons: [ { x:29.5*t, y:11.3*t, id:'d1' } ]
+  };
+}, { nm:'PRIMER' }));
+
+/* L2 ORBITAL: planetoids with pull gravity, hop world to world */
+LEVELS.push(Object.assign(function(){
+  const g = grid(50, 32); g.border();
+  g.fill(1, 30, 48, 30);                       // low floor over the void
+  const A = { x: 8*t, y:25*t, r:52 }, B = { x:18*t, y:14*t, r:44 };
+  const C = { x:31*t, y:22*t, r:60 }, D = { x:42*t, y: 9*t, r:48 };
+  const sph = s => ({ ...s, inf: s.r + 170, pull: 1500 });
+  return {
+    map: g.rows(), spawn: { x:A.x, y:A.y - A.r - 14 },
+    exit: { x:D.x, y:D.y - D.r - 22, w:26, h:44 },
+    spheres: [sph(A), sph(B), sph(C), sph(D)],
+    wells: [ { x:26.5*t, y:6.5*t, inf:200, pull:1400 } ],
+    golds: [].concat(
+      ring(A.x, A.y, A.r+18, 5, -Math.PI, 0),
+      ring(B.x, B.y, B.r+18, 5, -Math.PI*.9, Math.PI*.1),
+      ring(C.x, C.y, C.r+18, 6, -Math.PI, Math.PI*.2),
+      ring(D.x, D.y, D.r+18, 4, -Math.PI, -Math.PI*.1),
+      [ T(23,9), T(26.5,6.5), T(30,5.5) ]
+    ),
+    checkpoints: [ { x:B.x, y:B.y - B.r - 12 }, { x:C.x, y:C.y - C.r - 12 } ],
+    spikes: [ { x:1*t, y:29.45*t, w:47.9*t, h:.55*t } ],
+    lasers: [ { x1:36.5*t, y1:1*t, x2:36.5*t, y2:17*t, id:'p1' } ],
+    buttons: [ { x:C.x + C.r*.83, y:C.y - C.r*.75, id:'p1' } ],
+    sawsP: [ { px:13*t, py:2.5*t, len:145, amp:1.05, w:1.5, ph:0, r:15 } ],
+    balls: [ { x:A.x - 30, y:A.y - A.r - 10, r:8 }, { x:C.x + 20, y:C.y - C.r - 10, r:10 } ]
+  };
+}, { nm:'ORBITAL' }));
+
+/* L3 CHIMNEY: one long climb; grip, kick, and mind the machinery */
+LEVELS.push(Object.assign(function(){
+  const g = grid(26, 84); g.fill(0, 0, 25, 83);           // solid rock
+  g.clear(2, 74, 23, 81);                                  // bottom hall
+  g.clear(17, 56, 20, 74);                                 // shaft A
+  g.clear(4, 52, 20, 55);                                  // ledge hall 1
+  g.clear(4, 34, 7, 52);                                   // shaft B
+  g.clear(4, 30, 21, 33);                                  // ledge hall 2
+  g.clear(15, 12, 18, 30);                                 // shaft C
+  g.clear(3, 4, 22, 11);                                   // summit hall
+  return {
+    map: g.rows(), spawn: T(2.8, 81.4),
+    exit: { ...T(20.5, 11.3), w:26, h:44 },
+    golds: [
+      T(12,81.3), T(18.5,70), T(18.5,64), T(18.5,58),
+      T(10,55.3), T(5.5,48), T(5.5,42), T(5.5,36),
+      T(12,33.3), T(16.5,26), T(16.5,20), T(16.5,14), T(8,11.3), T(12,11.3)
+    ],
+    checkpoints: [ T(6,55.4), T(19,33.4), T(4.5,11.4) ],
+    spikes: [
+      { x:14*t, y:81.45*t, w:9*t, h:.55*t },               // under shaft A
+      { x:9*t,  y:55.45*t, w:6*t, h:.55*t },               // ledge hall 1 mid
+      { x:9*t,  y:33.45*t, w:5*t, h:.55*t }                // ledge hall 2 mid
+    ],
+    lasers: [
+      { x1:17*t, y1:60.5*t, x2:21*t, y2:60.5*t, id:'c1' },
+      { x1:15*t, y1:18.5*t, x2:19*t, y2:18.5*t, id:'c2' }
+    ],
+    buttons: [ { x:4.8*t, y:81.3*t, id:'c1' }, { x:20.2*t, y:33.3*t, id:'c2' } ],
+    crushers: [
+      { bx:10*t, by:52*t, dx:0, dy:1, w:1.9*t, len:3.4*t, rest:1.2, slam:.26, hold:.45, ret:1.5, t0:0 },
+      { bx:14*t, by:52*t, dx:0, dy:1, w:1.9*t, len:3.4*t, rest:1.2, slam:.26, hold:.45, ret:1.5, t0:1.7 }
+    ],
+    pads: [ { x:12.4*t, y:81.5*t, w:1.6*t, h:.5*t, dx:.42, dy:-.91, pow:780 } ]
+  };
+}, { nm:'CHIMNEY' }));
+
+/* L4 HEXWORKS: ramps, diamonds, hexagons; the saws own the slopes */
+LEVELS.push(Object.assign(function(){
+  const g = grid(54, 30); g.border();
+  g.fill(1, 26, 52, 28);                                   // base floor
+  g.clear(23, 26, 29, 28); g.fill(23, 28, 29, 28);         // spike pit
+  g.fill(12, 20, 16, 25);                                  // plateau
+  const hex = (cx, cy, R) => { const p = []; for (let i = 0; i < 6; i++){
+    const a = i * Math.PI/3; p.push([cx + Math.cos(a)*R, cy + Math.sin(a)*R]); } return p; };
+  const dia = (cx, cy, R) => [[cx,cy-R],[cx+R,cy],[cx,cy+R],[cx-R,cy]];
+  return {
+    map: g.rows(), spawn: T(3.5, 24.4),
+    exit: { x:47.5*t, y:10*t - 3*t - 22, w:26, h:44, id:'h1' },
+    polys: [
+      [[4*t,26*t],[12*t,26*t],[12*t,20*t]],                // up ramp
+      [[16*t,20*t],[22*t,26*t],[16*t,26*t]],               // down ramp
+      [[34*t,26*t],[44*t,26*t],[44*t,22.6*t]],             // long diagonal
+      dia(26*t, 21.5*t, 1.6*t),                            // floating diamond
+      hex(31*t, 13*t, 4*t),                                // hex isle 1 (button)
+      hex(41*t, 19*t, 3.4*t),                              // hex isle 2
+      hex(47.5*t, 10*t, 3*t)                               // hex isle 3 (exit)
+    ],
+    doors: [ { x:44.4*t, y:9*t, w:12, h:11*t, id:'h1' } ],
+    golds: [
+      T(8,22.4), T(14,19.3), T(19,22.5), T(26,18.8),
+      T(29.6,9), T(31,8.4), T(32.4,9),
+      T(41,14.9), T(38.5,17.2), T(43.5,17.2), T(47.5,6.3), T(36,21.5)
+    ],
+    checkpoints: [ T(14,19.4), { x:41*t, y:15.6*t } ],
+    spikes: [ { x:23*t, y:27.45*t, w:6*t, h:.55*t } ],
+    sawsG: [
+      { wps:[T(5,25.45), T(11.6,20.5), T(16.4,20.5), T(21,25.45), T(16.4,20.5), T(11.6,20.5)], sp:120, r:14 },
+      { wps:[T(35,25.2), T(43.4,22.0), T(35,25.2)], sp:105, r:13 }
+    ],
+    sawsP: [ { px:36.5*t, py:2*t, len:150, amp:1.15, w:1.6, ph:0, r:15 } ],
+    pads: [
+      { x:13*t, y:19.5*t, w:2*t, h:.5*t, dx:.62, dy:-.78, pow:780 },
+      { x:40*t, y:15.66*t, w:2*t, h:.5*t, dx:.55, dy:-.83, pow:760 }
+    ],
+    buttons: [ { x:31*t, y:9.1*t, id:'h1' } ]
+  };
+}, { nm:'HEXWORKS' }));
+
+/* L5 GAUNTLET: columns, wells, pistons, lasers, pendulums, the shaft */
+LEVELS.push(Object.assign(function(){
+  const g = grid(62, 30); g.border();
+  g.fill(1, 26, 60, 28);                                   // base floor
+  g.clear(4, 26, 13, 27); g.fill(4, 28, 13, 28);           // (a) spike trench
+  g.clear(16, 26, 26, 27); g.fill(16, 28, 26, 28);         // (b) well pit
+  g.fill(14, 22, 15, 25);                                  // ledge after columns
+  g.fill(27, 20, 28, 25);                                  // landing tower after well
+  g.fill(29, 1, 29, 19);                                   // wall into crusher hall
+  g.fill(30, 1, 38, 20);  g.clear(30, 22, 38, 25);         // (c) crusher hall (ceiling row 21)
+  g.fill(39, 1, 39, 19);                                   // wall into laser room
+  g.fill(49, 1, 49, 15); g.fill(49, 21, 49, 25);           // (d) exit wall w/ high gap rows 16-20
+  g.fill(50, 26, 56, 27, '.'); g.clear(50, 26, 56, 27); g.fill(50, 28, 56, 28); // (e) pendulum pit
+  g.fill(51, 20, 52, 20); g.fill(54, 17, 55, 17);          // stepping blocks
+  g.fill(57, 1, 57, 20);                                   // (f) shaft left wall (gap 58-60 to right border)
+  return {
+    map: g.rows(), spawn: T(2.6, 24.4),
+    exit: { ...T(59, 2.2), w:26, h:44 },
+    fields: [
+      { x:5*t,  y:6*t, w:1.8*t, h:20*t, fx:0, fy:-1750 },  // push up
+      { x:8.6*t,y:6*t, w:1.8*t, h:20*t, fx:0, fy: 1100 },  // pull down
+      { x:11.6*t,y:6*t,w:1.8*t, h:20*t, fx:0, fy:-1750 }   // push up
+    ],
+    wells: [ { x:21*t, y:13*t, inf:230, pull:1500 } ],
+    crushers: [
+      { bx:31*t, by:21*t, dx:0, dy:1, w:1.8*t, len:4.4*t, rest:1.1, slam:.25, hold:.4, ret:1.3, t0:0 },
+      { bx:34*t, by:21*t, dx:0, dy:1, w:1.8*t, len:4.4*t, rest:1.1, slam:.25, hold:.4, ret:1.3, t0:1.05 },
+      { bx:37*t, by:21*t, dx:0, dy:1, w:1.8*t, len:4.4*t, rest:1.1, slam:.25, hold:.4, ret:1.3, t0:2.1 }
+    ],
+    lasers: [
+      { x1:41.5*t, y1:25.4*t, x2:49*t, y2:25.4*t, id:'g1' },
+      { x1:49.5*t, y1:15.5*t, x2:49.5*t, y2:21*t, id:'g2' }
+    ],
+    buttons: [ { x:40.4*t, y:25.3*t, id:'g1' }, { x:47.8*t, y:17*t, id:'g2' } ],
+    sawsP: [
+      { px:52*t, py:8*t, len:170, amp:1.1, w:1.7, ph:0, r:15 },
+      { px:55.5*t, py:6*t, len:200, amp:1.0, w:1.7, ph:Math.PI, r:15 }
+    ],
+    spikes: [
+      { x:4*t, y:27.45*t, w:10*t, h:.55*t },
+      { x:16*t, y:27.45*t, w:11*t, h:.55*t },
+      { x:50*t, y:27.45*t, w:7*t, h:.55*t }
+    ],
+    golds: [
+      T(5.9,10), T(12.5,10), T(9.5,22),
+      T(18,16), T(21,10.5), T(24,9),
+      T(31.9,24.3), T(34.9,24.3), T(37.9,24.3),
+      T(44,22.3), T(47.8,15),
+      T(51.5,18.5), T(54.5,15.5),
+      T(58.5,16), T(58.5,10), T(58.5,5)
+    ],
+    checkpoints: [ T(14.5,21.4), T(27.5,19.4), { x:39.5*t, y:25.4*t }, T(50.8,19.4) ],
+    patrollers: [ { wps:[T(42,25.45), T(48,25.45)], sp:110, r:12 } ]
+  };
+}, { nm:'GAUNTLET' }));
+
+/* ---------------- runtime level state ---------------- */
+let curLevel = 0, pendingLevel = 0, switchState = {};
+let MAP = [], MW = 0, MH = 0, SPAWN0 = { x:0, y:0 };
+let golds = [], checkpoints = [], platforms = [], patrollers = [], chargers = [], balls = [];
+let polys = [], spheres = [], wells = [], fields = [], pads = [], spikes = [];
+let lasers = [], buttons = [], doors = [], sawsP = [], sawsG = [], crushers = [], crusherRects = [];
+let exitDoor = { x:0, y:0, w:26, h:44 };
 const solidAt = (tx, ty) => (tx < 0 || ty < 0 || tx >= MW || ty >= MH) ? true : MAP[ty][tx] === '#';
 const solidPx = (x, y) => solidAt(Math.floor(x / TS), Math.floor(y / TS));
 
@@ -137,49 +345,38 @@ const COL = {
 };
 
 /* ---------------- entities ---------------- */
-const T = (x, y) => ({ x: x * TS, y: y * TS });
 
-const SPAWN0 = T(3.5, 27.4);
+let goldCount = 0, deaths = 0, levelTime = 0, running = false;
+let shake = 0, hintTiltT = 0;
 
-const golds = [
-  T(5,27.1), T(12.7,25.3),
-  T(15,24.35), T(16.5,24.35), T(18,24.35),
-  T(3.5,15.3), T(7.5,10.3),
-  T(27,19.35), T(31,19.35), T(35,19.35),
-  T(30,11.2), T(32.8,13), T(30,14.8), T(27.2,13),
-  T(41,12), T(41,8),
-  T(30.5,3.3), T(32.5,3.3), T(34.5,3.3)
-].map(p => ({ ...p, got:false, t: Math.random() * 6 }));
-
-const checkpoints = [
-  { ...T(15.5,24.4), on:false },
-  { ...T(37,19.35), on:false }
-];
-
-const exitDoor = { ...T(45,2.15), w:26, h:44 };
-
-const platforms = [
-  { x:T(22,0).x, y:0, w:3*TS, h:12, wps:[T(22,27.3), T(22,21.35)], i:0, sp:66, px:0, py:0 }
-];
-platforms.forEach(p => { p.x = p.wps[0].x; p.y = p.wps[0].y; });
-
-const patrollers = [
-  { wps:[T(26,19.45), T(36,19.45)], i:0, sp:104, x:0, y:0, r:12, fx:1 },
-  { wps:[T(27.2,11.2), T(32.8,11.2), T(32.8,14.8), T(27.2,14.8)], i:0, sp:96, x:0, y:0, r:12, fx:1 }
-];
-patrollers.forEach(e => { e.x = e.wps[0].x; e.y = e.wps[0].y; });
-
-const chargers = [
-  { x:T(35,13).x, y:T(35,13).y, hx:T(35,13).x, hy:T(35,13).y, r:13,
-    state:'idle', t:0, dx:0, dy:0, range:300, bob:Math.random()*6 }
-];
-
-const balls = [
-  { x:T(6,27.3).x,  y:T(6,27.3).y,  vx:0, vy:0, r:9,  rot:0 },
-  { x:T(7.3,27.3).x,y:T(7.3,27.3).y,vx:0, vy:0, r:11, rot:0 },
-  { x:T(8.7,27.3).x,y:T(8.7,27.3).y,vx:0, vy:0, r:8,  rot:0 }
-];
-
+function loadLevel(i){
+  curLevel = i; pendingLevel = i;
+  const L = LEVELS[i]();
+  MAP = L.map; MW = MAP[0].length; MH = MAP.length;
+  SPAWN0 = L.spawn; exitDoor = L.exit;
+  golds = (L.golds || []).map(p => ({ ...p, got:false, t:Math.random()*6 }));
+  checkpoints = (L.checkpoints || []).map(p => ({ ...p, on:false }));
+  platforms = (L.platforms || []).map(p => ({ ...p, x:p.wps[0].x, y:p.wps[0].y, i:0, px:0, py:0 }));
+  patrollers = (L.patrollers || []).map(e => ({ ...e, x:e.wps[0].x, y:e.wps[0].y, i:0, fx:1 }));
+  chargers = (L.chargers || []).map(c => ({ ...c, hx:c.x, hy:c.y, state:'idle', t:0, dx:0, dy:0, bob:Math.random()*6 }));
+  balls = (L.balls || []).map(b => ({ ...b, vx:0, vy:0, rot:0 }));
+  polys = L.polys || []; spheres = L.spheres || []; wells = L.wells || []; fields = L.fields || [];
+  pads = (L.pads || []).map(p => ({ ...p, cool:0, flash:0 }));
+  spikes = L.spikes || []; lasers = L.lasers || [];
+  buttons = (L.buttons || []).map(b => ({ ...b, r: b.r || 13, hit:false }));
+  doors = (L.doors || []).map(d => ({ ...d, openT:0 }));
+  sawsP = L.sawsP || [];
+  sawsG = (L.sawsG || []).map(s => ({ ...s, x:s.wps[0].x, y:s.wps[0].y, i:0, rot:0 }));
+  crushers = (L.crushers || []).map(c => ({ ...c }));
+  crusherRects = crushers.map(() => ({ x:0, y:0, w:0, h:0, py:0 }));
+  switchState = {};
+  goldCount = 0; deaths = 0; levelTime = 0;
+  splats.length = 0; gibs.length = 0;
+  P.spawnX = SPAWN0.x; P.spawnY = SPAWN0.y; P.won = false;
+  respawn();
+}
+function resetLevel(){ loadLevel(curLevel); }
+const doorSolid = d => !switchState[d.id] || d.openT < .9;
 /* ---------------- gravity ---------------- */
 let gAng = 0;                 // 0 = straight down (canvas +y)
 let gTargetAng = 0;
@@ -256,6 +453,29 @@ function hookMotion(){
   }
 }
 
+/* ---------------- gravity field: tilt + planets + wells + columns ---------------- */
+function fieldAt(x, y){
+  let ax = gDir.x * PHYS.G, ay = gDir.y * PHYS.G, dom = 0;
+  for (const s of spheres){
+    const dx = s.x - x, dy = s.y - y, d = Math.hypot(dx, dy) || 1;
+    if (d < s.inf){
+      const w2 = Math.min(1, (s.inf - d) / Math.max(1, s.inf - s.r - 30));
+      dom = Math.max(dom, w2);
+      ax += dx / d * s.pull * w2; ay += dy / d * s.pull * w2;
+    }
+  }
+  if (dom > 0){ ax -= gDir.x * PHYS.G * dom * .85; ay -= gDir.y * PHYS.G * dom * .85; }
+  for (const w2 of wells){
+    const dx = w2.x - x, dy = w2.y - y, d = Math.hypot(dx, dy) || 1;
+    if (d < w2.inf){
+      const k = 1 - d / w2.inf;
+      ax += dx / d * w2.pull * k; ay += dy / d * w2.pull * k;
+    }
+  }
+  for (const f of fields)
+    if (x > f.x && x < f.x + f.w && y > f.y && y < f.y + f.h){ ax += f.fx; ay += f.fy; }
+  return { x: ax, y: ay };
+}
 /* ---------------- audio (tiny synth blips) ---------------- */
 let AC = null;
 function audioInit(){ try{ AC = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){} }
@@ -284,6 +504,9 @@ const sGold = () => { blip(1180, 1750, .09, 'sine', .12); blip(1760, 2350, .12, 
 const sCp   = () => { blip(520, 1040, .16, 'triangle', .12); };
 const sDie  = () => { noiseBurst(.28, .3); blip(180, 40, .3, 'sawtooth', .18); };
 const sWin  = () => { blip(520,520,.1,'square',.1); setTimeout(()=>blip(660,660,.1,'square',.1),110); setTimeout(()=>blip(880,1320,.25,'square',.12),220); };
+const sPad    = () => blip(190, 640, .18, 'sine', .16);
+const sButton = () => { blip(760, 760, .07, 'square', .1); setTimeout(()=>blip(1010,1010,.1,'square',.1), 80); };
+const sPower  = () => blip(900, 120, .3, 'sawtooth', .1);
 
 /* ---------------- input ---------------- */
 const input = { move:0, jumpBuf:0, jumpHeld:false };
@@ -327,38 +550,105 @@ function readInput(dt){
 
 /* ---------------- player ---------------- */
 const P = {
-  x:SPAWN0.x, y:SPAWN0.y, vx:0, vy:0, r:10,
+  x:0, y:0, gA:0, upX:0, upY:-1, vx:0, vy:0, r:10,
   grounded:false, groundN:{x:0,y:-1}, coyote:0,
   wallN:null, wallCoyote:0, wallStick:null, wallGrip:0, offWallT:1,
   dead:false, deadT:0, won:false,
-  spawnX:SPAWN0.x, spawnY:SPAWN0.y,
-  runPhase:0, squash:0, faceDir:1, landFlash:0
+  spawnX:0, spawnY:0,
+  runPhase:0, squash:0, faceDir:1, landFlash:0, jumpT:9
 };
 const PHYS = {
   G:950, RUN:265, ACC_G:2200, ACC_A:900, AIR_MAX:265,
   FRIC:6.5, JUMP:470, WJ_OUT:300, WJ_UP:400,
   SLIDE:85, GRIP:.8, TERM:800, DEATH_V:760
 };
-let goldCount = 0, deaths = 0, levelTime = 0, running = false;
-let shake = 0, hintTiltT = 0;
 
-/* ---------------- collision helpers ---------------- */
+/* ---------------- collision ---------------- */
 function collideCircleWorld(b, restitution){
   // returns { impact, contacts:[{nx,ny}], onPlat }
   let impact = 0; const contacts = []; let onPlat = null;
+  const imp = v => impact = Math.max(impact, v);
   for (let pass = 0; pass < 2; pass++){
     const tx0 = Math.floor((b.x - b.r) / TS), tx1 = Math.floor((b.x + b.r) / TS);
     const ty0 = Math.floor((b.y - b.r) / TS), ty1 = Math.floor((b.y + b.r) / TS);
     for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++){
       if (!solidAt(tx, ty)) continue;
-      resolveAABB(b, tx*TS, ty*TS, TS, TS, restitution, contacts, v => impact = Math.max(impact, v));
+      resolveAABB(b, tx*TS, ty*TS, TS, TS, restitution, contacts, imp);
     }
     for (const pl of platforms){
-      const hit = resolveAABB(b, pl.x - pl.w/2, pl.y - pl.h/2, pl.w, pl.h, restitution, contacts, v => impact = Math.max(impact, v));
-      if (hit && (hit.nx * upDir.x + hit.ny * upDir.y) > 0.5) onPlat = pl;
+      const hit = resolveAABB(b, pl.x - pl.w/2, pl.y - pl.h/2, pl.w, pl.h, restitution, contacts, imp);
+      if (hit && (hit.nx * b_upx(b) + hit.ny * b_upy(b)) > 0.5) onPlat = pl;
     }
+    for (const cr of crusherRects)
+      if (cr.w > 0) resolveAABB(b, cr.x, cr.y, cr.w, cr.h, restitution, contacts, imp);
+    for (const d of doors)
+      if (doorSolid(d)) resolveAABB(b, d.x - d.w/2, d.y - d.h/2, d.w, d.h, restitution, contacts, imp);
+    for (const s of spheres) resolveCircleSolid(b, s.x, s.y, s.r, restitution, contacts, imp);
+    for (const pg of polys) resolvePoly(b, pg, restitution, contacts, imp);
   }
   return { impact, contacts, onPlat };
+}
+// platform-standing test needs an "up": the player's local up, others use tilt up
+const b_upx = b => (b === P ? P.upX : upDir.x);
+const b_upy = b => (b === P ? P.upY : upDir.y);
+
+function resolveCircleSolid(b, cx, cy, R, rest, contacts, onImpact){
+  const dx = b.x - cx, dy = b.y - cy, d = Math.hypot(dx, dy);
+  if (d >= R + b.r || d < 1e-6) return null;
+  const nx = dx / d, ny = dy / d;
+  b.x = cx + nx * (R + b.r); b.y = cy + ny * (R + b.r);
+  const vn = b.vx * nx + b.vy * ny;
+  if (vn < 0){
+    onImpact(-vn);
+    const k = 1 + (rest || 0);
+    b.vx -= vn * nx * k; b.vy -= vn * ny * k;
+  }
+  const c = { nx, ny }; contacts.push(c); return c;
+}
+function resolvePoly(b, pts, rest, contacts, onImpact){
+  let inside = true, sign = 0, bx = 0, by = 0, bd = 1e9;
+  for (let i = 0; i < pts.length; i++){
+    const a = pts[i], c2 = pts[(i + 1) % pts.length];
+    const ex = c2[0] - a[0], ey = c2[1] - a[1];
+    const cr = ex * (b.y - a[1]) - ey * (b.x - a[0]);
+    if (cr !== 0){ const s = Math.sign(cr); if (!sign) sign = s; else if (s !== sign) inside = false; }
+    const L2 = ex*ex + ey*ey || 1;
+    const tt = Math.max(0, Math.min(1, ((b.x - a[0]) * ex + (b.y - a[1]) * ey) / L2));
+    const px = a[0] + ex * tt, py = a[1] + ey * tt;
+    const d = Math.hypot(b.x - px, b.y - py);
+    if (d < bd){ bd = d; bx = px; by = py; }
+  }
+  if (!inside && bd >= b.r) return null;
+  let nx, ny;
+  if (inside){
+    const d = bd || 1;
+    nx = (bx - b.x) / d; ny = (by - b.y) / d;     // out through nearest edge
+  } else {
+    const d = bd || 1;
+    nx = (b.x - bx) / d; ny = (b.y - by) / d;
+  }
+  b.x = bx + nx * b.r; b.y = by + ny * b.r;
+  const vn = b.vx * nx + b.vy * ny;
+  if (vn < 0){
+    onImpact(-vn);
+    const k = 1 + (rest || 0);
+    b.vx -= vn * nx * k; b.vy -= vn * ny * k;
+  }
+  const c = { nx, ny }; contacts.push(c); return c;
+}
+function pointInPoly(x, y, pts){
+  let sign = 0;
+  for (let i = 0; i < pts.length; i++){
+    const a = pts[i], c2 = pts[(i + 1) % pts.length];
+    const cr = (c2[0]-a[0]) * (y-a[1]) - (c2[1]-a[1]) * (x-a[0]);
+    if (cr !== 0){ const s = Math.sign(cr); if (!sign) sign = s; else if (s !== sign) return false; }
+  }
+  return true;
+}
+function segDist(x, y, x1, y1, x2, y2){
+  const ex = x2 - x1, ey = y2 - y1, L2 = ex*ex + ey*ey || 1;
+  const tt = Math.max(0, Math.min(1, ((x - x1) * ex + (y - y1) * ey) / L2));
+  return Math.hypot(x - (x1 + ex*tt), y - (y1 + ey*tt));
 }
 function resolveAABB(b, rx, ry, rw, rh, rest, contacts, onImpact){
   const cx = Math.max(rx, Math.min(b.x, rx + rw));
@@ -416,7 +706,8 @@ function explode(x, y, vx, vy){
 function stepGibs(dt){
   for (let i = gibs.length - 1; i >= 0; i--){
     const g = gibs[i];
-    g.vx += gDir.x * PHYS.G * dt; g.vy += gDir.y * PHYS.G * dt;
+    const F = fieldAt(g.x, g.y);
+    g.vx += F.x * dt; g.vy += F.y * dt;
     const nx = g.x + g.vx * dt, ny = g.y + g.vy * dt;
     if (solidPx(nx, g.y)){ g.vx *= -.35; if (g.kind === 'blood') stainAt(nx, g.y, g); }
     else g.x = nx;
@@ -446,28 +737,53 @@ function respawn(){
 function win(){
   if (P.won) return;
   P.won = true; running = false; sWin();
+  const lastL = curLevel >= LEVELS.length - 1;
+  pendingLevel = lastL ? 0 : curLevel + 1;
   const st = document.getElementById('stats');
   st.style.display = 'block';
-  st.innerHTML = 'LEVEL COMPLETE<br>gold <b>' + goldCount + ' / ' + golds.length + '</b> · time ' +
-    levelTime.toFixed(1) + 's · deaths ' + deaths;
+  st.innerHTML = LEVELS[curLevel].nm + ' CLEAR<br>gold <b>' + goldCount + ' / ' + golds.length + '</b> · time ' +
+    levelTime.toFixed(1) + 's · deaths ' + deaths +
+    (lastL ? '<br><b>ALL FIVE LEVELS DOWN.</b>' : '');
   document.getElementById('howto').style.display = 'none';
-  document.getElementById('startBtn').textContent = 'RUN IT AGAIN';
+  document.getElementById('startBtn').textContent = lastL ? 'FROM THE TOP' : 'NEXT: ' + LEVELS[pendingLevel].nm;
   document.getElementById('overlay').classList.remove('hidden');
+  syncLevelRow();
 }
-function resetLevel(){
-  golds.forEach(g => g.got = false);
-  checkpoints.forEach(c => c.on = false);
-  goldCount = 0; deaths = 0; levelTime = 0;
-  splats.length = 0; gibs.length = 0;
-  P.spawnX = SPAWN0.x; P.spawnY = SPAWN0.y; P.won = false;
-  balls[0].x = T(6,27.3).x;  balls[0].y = T(6,27.3).y;  balls[0].vx = balls[0].vy = 0;
-  balls[1].x = T(7.3,27.3).x;balls[1].y = T(7.3,27.3).y;balls[1].vx = balls[1].vy = 0;
-  balls[2].x = T(8.7,27.3).x;balls[2].y = T(8.7,27.3).y;balls[2].vx = balls[2].vy = 0;
-  chargers.forEach(c => { c.state = 'idle'; c.x = c.hx; c.y = c.hy; c.t = 0; });
-  respawn();
-}
-
 /* ---------------- simulation ---------------- */
+function crusherUpdate(dt){
+  for (let i = 0; i < crushers.length; i++){
+    const c = crushers[i], R = crusherRects[i];
+    const cyc = c.rest + c.slam + c.hold + c.ret;
+    let tt = (levelTime + c.t0) % cyc, e;
+    if (tt < c.rest) e = 0;
+    else if (tt < c.rest + c.slam) e = (tt - c.rest) / c.slam;
+    else if (tt < c.rest + c.slam + c.hold) e = 1;
+    else e = 1 - (tt - c.rest - c.slam - c.hold) / c.ret;
+    const L = 8 + e * c.len;
+    if (c.dx !== 0){
+      R.x = c.dx > 0 ? c.bx : c.bx - L; R.y = c.by - c.w/2; R.w = L; R.h = c.w;
+    } else {
+      R.x = c.bx - c.w/2; R.y = c.dy > 0 ? c.by : c.by - L; R.w = c.w; R.h = L;
+    }
+    R.e = e;
+  }
+}
+function crushedDeep(){
+  // after resolution, still buried in something solid = squeezed to paste
+  const pr = P.r - 7;
+  const probe = (rx, ry, rw, rh) => {
+    const cx = Math.max(rx, Math.min(P.x, rx + rw));
+    const cy = Math.max(ry, Math.min(P.y, ry + rh));
+    return Math.hypot(P.x - cx, P.y - cy) < pr;
+  };
+  const tx0 = Math.floor((P.x - P.r) / TS), tx1 = Math.floor((P.x + P.r) / TS);
+  const ty0 = Math.floor((P.y - P.r) / TS), ty1 = Math.floor((P.y + P.r) / TS);
+  for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++)
+    if (solidAt(tx, ty) && probe(tx*TS, ty*TS, TS, TS)) return true;
+  for (const cr of crusherRects) if (cr.w > 0 && probe(cr.x, cr.y, cr.w, cr.h)) return true;
+  for (const d of doors) if (doorSolid(d) && probe(d.x - d.w/2, d.y - d.h/2, d.w, d.h)) return true;
+  return false;
+}
 function step(dt){
   levelTime += dt;
   hintTiltT += dt;
@@ -481,22 +797,35 @@ function step(dt){
 
   // moving platforms
   for (const pl of platforms){
-    const w = pl.wps[pl.i], dx = w.x - pl.x, dy = w.y - pl.y, d = Math.hypot(dx, dy);
+    const w2 = pl.wps[pl.i], dx = w2.x - pl.x, dy = w2.y - pl.y, d = Math.hypot(dx, dy);
     const mv = pl.sp * dt;
-    if (d <= mv){ pl.px = dx; pl.py = dy; pl.x = w.x; pl.y = w.y; pl.i = (pl.i + 1) % pl.wps.length; }
+    if (d <= mv){ pl.px = dx; pl.py = dy; pl.x = w2.x; pl.y = w2.y; pl.i = (pl.i + 1) % pl.wps.length; }
     else { pl.px = dx / d * mv; pl.py = dy / d * mv; pl.x += pl.px; pl.y += pl.py; }
   }
+  crusherUpdate(dt);
 
-  // balls: dumb happy physics props
+  // ground saws roll their routes
+  for (const s of sawsG){
+    const w2 = s.wps[s.i], dx = w2.x - s.x, dy = w2.y - s.y, d = Math.hypot(dx, dy);
+    const mv = s.sp * dt;
+    if (d <= mv){ s.x = w2.x; s.y = w2.y; s.i = (s.i + 1) % s.wps.length; }
+    else { s.x += dx / d * mv; s.y += dy / d * mv; }
+    s.rot += dt * 14;
+  }
+
+  // doors animate open
+  for (const d of doors) if (switchState[d.id]) d.openT = Math.min(1, d.openT + dt * 1.6);
+
+  // balls: dumb happy physics props (they orbit planets too)
   for (const b of balls){
-    b.vx += gDir.x * PHYS.G * dt; b.vy += gDir.y * PHYS.G * dt;
+    const F = fieldAt(b.x, b.y);
+    b.vx += F.x * dt; b.vy += F.y * dt;
     b.vx *= (1 - .3 * dt); b.vy *= (1 - .05 * dt);
     b.x += b.vx * dt; b.y += b.vy * dt;
     collideCircleWorld(b, .3);
     b.rot += b.vx * dt / b.r;
-    // player nudges balls
-    const dx = b.x - P.x, dy = b.y - P.y, rr = b.r + P.r, d = Math.hypot(dx, dy);
-    if (d < rr && d > 0){ b.vx += dx / d * 160 * dt * 8; b.vy += dy / d * 160 * dt * 8; }
+    const dx = b.x - P.x, dy = b.y - P.y, rr2 = b.r + P.r, d = Math.hypot(dx, dy);
+    if (d < rr2 && d > 0){ b.vx += dx / d * 160 * dt * 8; b.vy += dy / d * 160 * dt * 8; }
   }
 
   if (P.dead){
@@ -508,42 +837,41 @@ function step(dt){
   }
   stepGibs(dt);
 
-  /* --- player physics --- */
-  P.vx += gDir.x * PHYS.G * dt;
-  P.vy += gDir.y * PHYS.G * dt;
+  /* --- player physics (in the LOCAL gravity field) --- */
+  const F = fieldAt(P.x, P.y);
+  const fm = Math.hypot(F.x, F.y) || 1;
+  const lgx = F.x / fm, lgy = F.y / fm;          // local gravity unit
+  const ux = -lgx, uy = -lgy;                     // local up
+  P.upX = ux; P.upY = uy;
+  P.gA = Math.atan2(lgx, lgy);
+  P.vx += F.x * dt;
+  P.vy += F.y * dt;
 
-  const rx = -upDir.y, ry = upDir.x;                    // "right" relative to gravity
+  const rx = -uy, ry = ux;                        // local right
   const m = input.move;
   if (m !== 0) P.faceDir = m > 0 ? 1 : -1;
 
   if (P.grounded){
-    // move along the ground tangent; gravity's tangential pull stays untouched,
-    // so a tilted floor drags you downslope on its own.
     const n = P.groundN;
-    let tx = n.ny, ty = -n.nx;           // tangent = rot90(normal)
+    let tx = n.ny, ty = -n.nx;
     if (tx * rx + ty * ry < 0){ tx = -tx; ty = -ty; }
     const vt = P.vx * tx + P.vy * ty;
-    // tilt IS the throttle: the downslope component of gravity becomes run input,
-    // so tipping the world makes the ninja sprint into the fall.
-    const gt = gDir.x * tx + gDir.y * ty;
+    // tilt IS the throttle: the downslope component of gravity becomes run input
+    const gt = lgx * tx + lgy * ty;
     let em = Math.max(-1, Math.min(1, m + gt * 1.9));
     if (Math.abs(em) < .1) em = 0;
     if (em !== 0){
       P.faceDir = em > 0 ? 1 : -1;
-      // acceleration builds with the lean: gentle tilt = gentle stride,
-      // hard tilt = sprint into the fall
       const a = PHYS.ACC_G * em * Math.abs(em);
       if (!(vt * em > 0 && Math.abs(vt) > PHYS.RUN * Math.abs(em))){
         P.vx += tx * a * dt;
         P.vy += ty * a * dt;
       }
     }
-    // rolling friction on the tangential part (gravity keeps feeding slope-slide)
     const f = Math.min(1, PHYS.FRIC * dt) * (m === 0 ? 1 : .25);
     P.vx -= tx * vt * f; P.vy -= ty * vt * f;
     P.runPhase += Math.abs(vt) * dt * .06;
   } else {
-    // air control
     const vr = P.vx * rx + P.vy * ry;
     if (m !== 0 && !(vr * m > 0 && Math.abs(vr) > PHYS.AIR_MAX)){
       P.vx += rx * m * PHYS.ACC_A * dt;
@@ -557,50 +885,57 @@ function step(dt){
     P.wallGrip = Math.max(0, P.wallGrip - dt);
     const gripping = P.wallGrip > 0;
     const cap = gripping ? 0 : PHYS.SLIDE;
-    const vg = P.vx * gDir.x + P.vy * gDir.y;
+    const vg = P.vx * lgx + P.vy * lgy;
     if (vg > cap){
       const red = Math.min(vg - cap, (gripping ? 9000 : 5200) * dt);
-      P.vx -= gDir.x * red; P.vy -= gDir.y * red;
+      P.vx -= lgx * red; P.vy -= lgy * red;
     }
-    // hand pressure keeps you on the wall while gravity runs along it;
-    // tilt away (gravity pulling off the wall) and the hold breaks
-    if (gDir.x * wn.nx + gDir.y * wn.ny < .25){
+    if (lgx * wn.nx + lgy * wn.ny < .25){
       P.vx -= wn.nx * 90 * dt; P.vy -= wn.ny * 90 * dt;
     }
   } else {
     P.wallGrip = 0;
   }
 
-  // terminal velocity along gravity
+  // terminal velocity along local gravity
   {
-    const vg = P.vx * gDir.x + P.vy * gDir.y;
-    if (vg > PHYS.TERM){ P.vx -= gDir.x * (vg - PHYS.TERM); P.vy -= gDir.y * (vg - PHYS.TERM); }
+    const vg = P.vx * lgx + P.vy * lgy;
+    if (vg > PHYS.TERM){ P.vx -= lgx * (vg - PHYS.TERM); P.vy -= lgy * (vg - PHYS.TERM); }
   }
 
   // jumping
   if (input.jumpBuf > 0){
     if (P.grounded || P.coyote > 0){
-      const vup = P.vx * upDir.x + P.vy * upDir.y;
-      P.vx += upDir.x * (PHYS.JUMP - Math.max(vup, 0));
-      P.vy += upDir.y * (PHYS.JUMP - Math.max(vup, 0));
-      P.grounded = false; P.coyote = 0; input.jumpBuf = 0; P.squash = -.28; sJump();
+      const vup = P.vx * ux + P.vy * uy;
+      P.vx += ux * (PHYS.JUMP - Math.max(vup, 0));
+      P.vy += uy * (PHYS.JUMP - Math.max(vup, 0));
+      P.grounded = false; P.coyote = 0; input.jumpBuf = 0; P.squash = -.28; P.jumpT = 0; sJump();
     } else if (P.wallCoyote > 0 && P.wallN){
       const wn = P.wallN;
-      const vup0 = P.vx * upDir.x + P.vy * upDir.y;
-      // strip old velocity, kick out + up
-      P.vx = wn.nx * PHYS.WJ_OUT + upDir.x * (PHYS.WJ_UP + Math.max(vup0, 0) * .2);
-      P.vy = wn.ny * PHYS.WJ_OUT + upDir.y * (PHYS.WJ_UP + Math.max(vup0, 0) * .2);
-      P.wallCoyote = 0; input.jumpBuf = 0; P.squash = -.24;
+      const vup0 = P.vx * ux + P.vy * uy;
+      P.vx = wn.nx * PHYS.WJ_OUT + ux * (PHYS.WJ_UP + Math.max(vup0, 0) * .2);
+      P.vy = wn.ny * PHYS.WJ_OUT + uy * (PHYS.WJ_UP + Math.max(vup0, 0) * .2);
+      P.wallCoyote = 0; input.jumpBuf = 0; P.squash = -.24; P.jumpT = 0;
       P.faceDir = (wn.nx * rx + wn.ny * ry) > 0 ? 1 : -1;
       sWall();
     }
   }
-  // variable jump: release to cut rise
-  if (!input.jumpHeld){
-    const vup = P.vx * upDir.x + P.vy * upDir.y;
+  P.jumpT += dt;
+  if (!input.jumpHeld && P.jumpT < .55){
+    const vup = P.vx * ux + P.vy * uy;
     if (vup > 160){
       const cut = (vup - 160) * Math.min(1, 12 * dt);
-      P.vx -= upDir.x * cut * .5; P.vy -= upDir.y * cut * .5;
+      P.vx -= ux * cut * .5; P.vy -= uy * cut * .5;
+    }
+  }
+
+  // jump pads: hit one and it owns your velocity
+  for (const p of pads){
+    p.cool = Math.max(0, p.cool - dt); p.flash = Math.max(0, p.flash - dt);
+    if (p.cool <= 0 &&
+        P.x > p.x - 4 && P.x < p.x + p.w + 4 && P.y > p.y - 10 && P.y < p.y + p.h + 6){
+      P.vx = p.dx * p.pow; P.vy = p.dy * p.pow;
+      P.grounded = false; p.cool = .5; p.flash = .3; P.squash = -.4; P.jumpT = 9; sPad();
     }
   }
 
@@ -610,17 +945,18 @@ function step(dt){
 
   if (res.impact > PHYS.DEATH_V){ killPlayer(); return; }
   if (res.impact > 420){ P.squash = .35; shake = Math.max(shake, 4); }
+  if (crushedDeep()){ killPlayer(); return; }
 
   const wasGrounded = P.grounded;
   const hadWall = !!P.wallStick;
   P.grounded = false; P.wallStick = null;
   for (const c of res.contacts){
-    const du = c.nx * upDir.x + c.ny * upDir.y;
+    const du = c.nx * ux + c.ny * uy;
     if (du > .4){ P.grounded = true; P.groundN = c; }
     else if (Math.abs(du) <= .75){ P.wallStick = c; P.wallN = c; P.wallCoyote = .12; }
   }
   if (P.wallStick){
-    if (!hadWall && P.offWallT > .12) P.wallGrip = PHYS.GRIP; // fresh grab: grip
+    if (!hadWall && P.offWallT > .12) P.wallGrip = PHYS.GRIP;
     P.offWallT = 0;
   } else P.offWallT += dt;
   if (P.grounded){ P.coyote = .09; if (!wasGrounded) P.landFlash = .12; }
@@ -629,10 +965,36 @@ function step(dt){
   P.landFlash = Math.max(0, P.landFlash - dt);
   P.squash *= Math.pow(.001, dt);
 
-  // ride moving platform
   if (res.onPlat){ P.x += res.onPlat.px; P.y += res.onPlat.py; }
 
-  // world hazards & pickups
+  /* --- hazards --- */
+  for (const s of spikes){
+    const cx = Math.max(s.x, Math.min(P.x, s.x + s.w));
+    const cy = Math.max(s.y, Math.min(P.y, s.y + s.h));
+    if (Math.hypot(P.x - cx, P.y - cy) < P.r - 3){ killPlayer(); return; }
+  }
+  for (const l of lasers){
+    if (switchState[l.id]) continue;
+    if (segDist(P.x, P.y, l.x1, l.y1, l.x2, l.y2) < P.r + 3){ killPlayer(); return; }
+  }
+  for (const s of sawsP){
+    const a = Math.PI/2 + Math.sin(levelTime * s.w + s.ph) * s.amp;
+    s.cx = s.px + Math.cos(a) * s.len; s.cy = s.py + Math.sin(a) * s.len;
+    if (Math.hypot(P.x - s.cx, P.y - s.cy) < s.r + P.r - 2){ killPlayer(); return; }
+  }
+  for (const s of sawsG)
+    if (Math.hypot(P.x - s.x, P.y - s.y) < s.r + P.r - 2){ killPlayer(); return; }
+
+  /* --- buttons / pickups / goals --- */
+  for (const b of buttons){
+    if (b.hit) continue;
+    if (Math.hypot(b.x - P.x, b.y - P.y) < b.r + P.r){
+      b.hit = true; switchState[b.id] = true; sButton();
+      // laser power-down gets its own dying whine
+      if (lasers.some(l => l.id === b.id)) sPower();
+      shake = Math.max(shake, 3);
+    }
+  }
   for (const g of golds){
     if (g.got) continue;
     if (Math.hypot(g.x - P.x, g.y - P.y) < 22){ g.got = true; goldCount++; sGold(); }
@@ -642,21 +1004,18 @@ function step(dt){
       c.on = true; P.spawnX = c.x; P.spawnY = c.y - 6; sCp();
     }
   }
-  if (Math.abs(P.x - exitDoor.x) < exitDoor.w * .6 && Math.abs(P.y - exitDoor.y) < exitDoor.h * .62) win();
+  if (!(exitDoor.id && !switchState[exitDoor.id]) &&
+      Math.abs(P.x - exitDoor.x) < exitDoor.w * .6 && Math.abs(P.y - exitDoor.y) < exitDoor.h * .62) win();
 
   stepEnemies(dt);
 
-  // enemy contact = death
   if (!P.dead){
-    for (const e of patrollers){
+    for (const e of patrollers)
       if (Math.hypot(e.x - P.x, e.y - P.y) < e.r + P.r - 2){ killPlayer(); return; }
-    }
-    for (const e of chargers){
+    for (const e of chargers)
       if (Math.hypot(e.x - P.x, e.y - P.y) < e.r + P.r - 2){ killPlayer(); return; }
-    }
   }
 }
-
 function stepEnemies(dt){
   for (const e of patrollers){
     const w = e.wps[e.i], dx = w.x - e.x, dy = w.y - e.y, d = Math.hypot(dx, dy);
@@ -690,6 +1049,22 @@ function stepEnemies(dt){
 }
 
 /* ---------------- camera & render ---------------- */
+function drawSaw(x, y, r, rot){
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  ctx.fillStyle = COL.ink;
+  ctx.beginPath();
+  const teeth = 8;
+  for (let i = 0; i < teeth; i++){
+    const a0 = i / teeth * Math.PI * 2, a1 = (i + .5) / teeth * Math.PI * 2, a2 = (i + 1) / teeth * Math.PI * 2;
+    ctx.lineTo(Math.cos(a0) * r, Math.sin(a0) * r);
+    ctx.lineTo(Math.cos(a1) * (r + 5), Math.sin(a1) * (r + 5));
+    ctx.lineTo(Math.cos(a2) * r, Math.sin(a2) * r);
+  }
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = COL.bg;
+  ctx.beginPath(); ctx.arc(0, 0, r * .35, 0, 7); ctx.fill();
+  ctx.restore();
+}
 const cam = { x:SPAWN0.x, y:SPAWN0.y };
 function draw(){
   // camera: hard-locked to the player, dead center
@@ -768,13 +1143,159 @@ function draw(){
     }
   }
 
+
+  // gravity wells: lazy swirl
+  for (const w2 of wells){
+    ctx.strokeStyle = 'rgba(16,18,22,.18)'; ctx.lineWidth = 1.5;
+    for (let k = 0; k < 3; k++){
+      const rr2 = (w2.inf * (k + 1) / 3) * (1 - ((performance.now()/2400 + k/3) % (1/3)) * 0) ;
+      const ph = performance.now() / 1400 + k * 2.1;
+      ctx.beginPath(); ctx.arc(w2.x, w2.y, w2.inf * ((k + 1) / 3.4), ph, ph + 4.6); ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(16,18,22,.5)';
+    ctx.beginPath(); ctx.arc(w2.x, w2.y, 4, 0, 7); ctx.fill();
+  }
+  // gravity columns: marching arrows
+  for (const f of fields){
+    ctx.fillStyle = f.fy < 0 ? 'rgba(58,110,165,.10)' : 'rgba(168,18,31,.08)';
+    ctx.fillRect(f.x, f.y, f.w, f.h);
+    ctx.strokeStyle = f.fy < 0 ? 'rgba(58,110,165,.5)' : 'rgba(168,18,31,.45)';
+    ctx.lineWidth = 2;
+    const dirY = f.fy < 0 ? -1 : 1, sp = 42;
+    const off = (performance.now() / 14) % sp * -dirY;
+    for (let y = f.y - sp; y < f.y + f.h + sp; y += sp){
+      const yy = y + off;
+      if (yy < f.y + 6 || yy > f.y + f.h - 6) continue;
+      const cx2 = f.x + f.w / 2;
+      ctx.beginPath();
+      ctx.moveTo(cx2 - 8, yy); ctx.lineTo(cx2, yy + 9 * dirY); ctx.lineTo(cx2 + 8, yy);
+      ctx.stroke();
+    }
+  }
+  // planetoids
+  for (const s of spheres){
+    ctx.strokeStyle = 'rgba(16,18,22,.10)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.inf, 0, 7); ctx.stroke();
+    ctx.fillStyle = COL.tile;
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 7); ctx.fill();
+    ctx.strokeStyle = COL.tileEdge; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r - 1, 0, 7); ctx.stroke();
+    ctx.fillStyle = 'rgba(212,215,217,.12)';
+    ctx.beginPath(); ctx.arc(s.x - s.r*.3, s.y - s.r*.3, s.r*.45, 0, 7); ctx.fill();
+  }
+  // polys (ramps, diamonds, hexes)
+  for (const pg of polys){
+    ctx.fillStyle = COL.tile;
+    ctx.beginPath(); ctx.moveTo(pg[0][0], pg[0][1]);
+    for (let i = 1; i < pg.length; i++) ctx.lineTo(pg[i][0], pg[i][1]);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = COL.tileEdge; ctx.lineWidth = 2; ctx.stroke();
+  }
+  // doors
+  for (const d of doors){
+    const open = d.openT;
+    if (open >= 1) { ctx.strokeStyle = 'rgba(16,18,22,.25)'; ctx.lineWidth = 2;
+      ctx.strokeRect(d.x - d.w/2, d.y - d.h/2, d.w, d.h); continue; }
+    const h2 = d.h * (1 - open);
+    ctx.fillStyle = COL.tile;
+    ctx.fillRect(d.x - d.w/2, d.y - d.h/2, d.w, h2);
+    ctx.strokeStyle = switchState[d.id] ? COL.gold : COL.blood; ctx.lineWidth = 2;
+    ctx.strokeRect(d.x - d.w/2 + 1, d.y - d.h/2 + 1, d.w - 2, Math.max(2, h2 - 2));
+  }
+  // spikes
+  ctx.fillStyle = COL.tile;
+  for (const s of spikes){
+    const n = Math.max(2, Math.round(s.w / 13));
+    const sw = s.w / n;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++){
+      const x0 = s.x + i * sw;
+      ctx.moveTo(x0, s.y + s.h); ctx.lineTo(x0 + sw/2, s.y); ctx.lineTo(x0 + sw, s.y + s.h);
+    }
+    ctx.fill();
+  }
+  // lasers
+  for (const l of lasers){
+    const off = !!switchState[l.id];
+    // emitters
+    ctx.fillStyle = off ? 'rgba(16,18,22,.4)' : COL.blood;
+    ctx.beginPath(); ctx.arc(l.x1, l.y1, 5, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(l.x2, l.y2, 5, 0, 7); ctx.fill();
+    if (off) continue;
+    const pulse = .55 + Math.sin(performance.now() / 90) * .25;
+    ctx.strokeStyle = 'rgba(227,52,52,' + pulse + ')'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(l.x2, l.y2); ctx.stroke();
+    ctx.strokeStyle = 'rgba(227,52,52,.25)'; ctx.lineWidth = 7; ctx.stroke();
+  }
+  // buttons
+  for (const b of buttons){
+    ctx.fillStyle = b.hit ? COL.gold : COL.blood;
+    ctx.beginPath(); ctx.arc(b.x, b.y, 7, 0, 7); ctx.fill();
+    ctx.strokeStyle = COL.ink; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(b.x, b.y, 10 + (b.hit ? 0 : Math.sin(performance.now()/280) * 2), 0, 7); ctx.stroke();
+  }
+  // jump pads
+  for (const p of pads){
+    const glow = p.flash > 0 ? 1 : .55;
+    ctx.strokeStyle = 'rgba(242,182,50,' + glow + ')'; ctx.lineWidth = 3;
+    const cx2 = p.x + p.w/2, cy2 = p.y + p.h/2;
+    for (let k = 0; k < 2; k++){
+      const o = k * 8 + (performance.now()/120 % 8);
+      ctx.beginPath();
+      ctx.moveTo(cx2 - p.dx*o - (-p.dy)*10, cy2 - p.dy*o - (p.dx)*10);
+      ctx.lineTo(cx2 - p.dx*o + p.dx*9, cy2 - p.dy*o + p.dy*9);
+      ctx.lineTo(cx2 - p.dx*o + (-p.dy)*10, cy2 - p.dy*o + (p.dx)*10);
+      ctx.stroke();
+    }
+    ctx.fillStyle = COL.gold;
+    ctx.fillRect(p.x, p.y + p.h - 4, p.w, 4);
+  }
+  // crushers
+  for (let i = 0; i < crusherRects.length; i++){
+    const R = crusherRects[i];
+    if (R.w <= 0) continue;
+    ctx.fillStyle = COL.tile;
+    ctx.fillRect(R.x, R.y, R.w, R.h);
+    ctx.strokeStyle = COL.tileEdge; ctx.lineWidth = 2;
+    ctx.strokeRect(R.x + 1, R.y + 1, R.w - 2, R.h - 2);
+    // hazard chevrons on the crushing face
+    const c = crushers[i];
+    ctx.fillStyle = R.e > .05 ? COL.blood : 'rgba(168,18,31,.45)';
+    if (c.dy !== 0){
+      const fy = c.dy > 0 ? R.y + R.h : R.y;
+      ctx.beginPath();
+      for (let x = R.x + 4; x < R.x + R.w - 8; x += 12){
+        ctx.moveTo(x, fy); ctx.lineTo(x + 6, fy + 6 * c.dy); ctx.lineTo(x + 12, fy);
+      }
+      ctx.fill();
+    }
+  }
+  // pendulum saws
+  for (const s of sawsP){
+    const a = Math.PI/2 + Math.sin(levelTime * s.w + s.ph) * s.amp;
+    const cx2 = s.px + Math.cos(a) * s.len, cy2 = s.py + Math.sin(a) * s.len;
+    s.cx = cx2; s.cy = cy2;
+    ctx.strokeStyle = 'rgba(16,18,22,.5)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(s.px, s.py); ctx.lineTo(cx2, cy2); ctx.stroke();
+    ctx.fillStyle = COL.ink;
+    ctx.beginPath(); ctx.arc(s.px, s.py, 4, 0, 7); ctx.fill();
+    drawSaw(cx2, cy2, s.r, levelTime * 9);
+  }
+  for (const s of sawsG) drawSaw(s.x, s.y, s.r, s.rot);
+
   // exit door
   {
     const d = exitDoor;
     ctx.fillStyle = COL.door;
     ctx.fillRect(d.x - d.w/2, d.y - d.h/2, d.w, d.h);
-    ctx.strokeStyle = COL.gold; ctx.lineWidth = 2;
+    const locked = exitDoor.id && !switchState[exitDoor.id];
+    ctx.strokeStyle = locked ? COL.blood : COL.gold; ctx.lineWidth = 2;
     ctx.strokeRect(d.x - d.w/2 + 2, d.y - d.h/2 + 2, d.w - 4, d.h - 4);
+    if (locked){
+      ctx.fillStyle = COL.blood;
+      ctx.fillRect(d.x - 4, d.y - 6, 8, 8);
+      ctx.beginPath(); ctx.arc(d.x, d.y - 7, 4, Math.PI, 0); ctx.fill();
+    }
     ctx.fillStyle = COL.gold;
     ctx.beginPath(); ctx.arc(d.x + d.w/4 - 2, d.y, 2.5, 0, 7); ctx.fill();
   }
@@ -866,10 +1387,10 @@ function tri(a, b, c){
 function drawPlayer(){
   ctx.save();
   ctx.translate(P.x, P.y);
-  ctx.rotate(-gAng);                             // feet toward gravity's down
+  ctx.rotate(-P.gA);                             // feet toward LOCAL gravity
   const sq = P.squash;                           // <0 stretch (jump), >0 squash (land)
   ctx.scale(1 + sq * .8, 1 - sq * .8);
-  const vt = (P.vx * -upDir.y + P.vy * upDir.x); // rightward speed
+  const vt = (P.vx * -P.upY + P.vy * P.upX);     // rightward speed
   const lean = Math.max(-.4, Math.min(.4, vt / 600));
   ctx.rotate(lean);
 
@@ -877,7 +1398,7 @@ function drawPlayer(){
   // wall normal into local (character) frame
   let lwx = 0, lwy = 0;
   if (onWall){
-    const wn = P.wallN, cg = Math.cos(gAng), sg = Math.sin(gAng);
+    const wn = P.wallN, cg = Math.cos(P.gA), sg = Math.sin(P.gA);
     lwx = wn.nx * cg - wn.ny * sg;
     lwy = wn.nx * sg + wn.ny * cg;
     if (Math.abs(lwx) > .3) P.faceDir = lwx > 0 ? -1 : 1; // face the wall
@@ -934,6 +1455,9 @@ function drawHUD(){
   // timer + deaths
   ctx.textAlign = 'right';
   ctx.fillText(levelTime.toFixed(1) + 's  ×' + deaths, W - 16, 27);
+  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(16,18,22,.45)';
+  ctx.fillText('L' + (curLevel + 1) + ' · ' + LEVELS[curLevel].nm, W / 2, H - 14);
+  ctx.fillStyle = COL.ink; ctx.textAlign = 'left';
   ctx.textAlign = 'left';
 
   // gravity dial (the signature): fixed ring, falling needle
@@ -994,22 +1518,42 @@ requestAnimationFrame(frame);
 document.getElementById('startBtn').addEventListener('click', () => {
   audioInit();
   hookMotion();
-  // go fullscreen + lock landscape (Android needs fullscreen first)
   const el = document.documentElement;
   const lock = () => { try {
-    // lock to ONE landscape variant (whichever the phone is in now) so a
-    // 180-degree tilt never triggers an OS screen flip mid-run
     const cur = (screen.orientation && screen.orientation.type) || '';
-    const t = cur === 'landscape-secondary' ? 'landscape-secondary' : 'landscape-primary';
-    screen.orientation.lock(t).catch(()=>{});
+    const t2 = cur === 'landscape-secondary' ? 'landscape-secondary' : 'landscape-primary';
+    screen.orientation.lock(t2).catch(()=>{});
   } catch(e){} };
   if (el.requestFullscreen) el.requestFullscreen().then(lock).catch(lock); else lock();
   document.getElementById('overlay').classList.add('hidden');
   document.getElementById('rot').style.display = 'flex';
-  resetLevel();
+  loadLevel(pendingLevel);
   running = true;
   last = performance.now();
 });
+
+/* level select row on the overlay */
+const lvlRow = document.createElement('div');
+lvlRow.style.cssText = 'display:flex;gap:8px;justify-content:center;margin:4px 0';
+LEVELS.forEach((L, i) => {
+  const b = document.createElement('button');
+  b.textContent = (i + 1) + ' ' + L.nm;
+  b.style.cssText = 'font:700 10px ui-monospace,monospace;letter-spacing:.06em;padding:7px 8px;' +
+    'border:2px solid #2f333c;background:transparent;color:#2f333c;cursor:pointer;border-radius:3px';
+  b.addEventListener('click', () => { pendingLevel = i; syncLevelRow();
+    document.getElementById('startBtn').textContent = 'START: ' + L.nm; });
+  lvlRow.appendChild(b);
+});
+document.getElementById('startBtn').before(lvlRow);
+function syncLevelRow(){
+  [...lvlRow.children].forEach((b, i) => {
+    b.style.background = i === pendingLevel ? '#2f333c' : 'transparent';
+    b.style.color = i === pendingLevel ? '#d4d7d9' : '#2f333c';
+  });
+}
+syncLevelRow();
+
+loadLevel(0);
 
 </script>
 </body>
