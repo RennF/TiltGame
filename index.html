@@ -700,12 +700,11 @@ function draw(){
 
   ctx.fillStyle = COL.bg; ctx.fillRect(0, 0, W, H);
   ctx.save();
-  // camera rotates with gravity: the ninja stays upright on screen,
-  // the world tips around them
-  ctx.translate(W/2 + sx, H/2 + sy);
-  ctx.rotate(gAng);
-  ctx.translate(-cx, -cy);
-  const RV = Math.hypot(W, H) / 2 + TS;      // rotation-safe view radius
+  // fixed camera: the world is glued to the screen, so tilting the phone
+  // tilts the level in real space and the ninja always falls toward true
+  // earth-down (their sprite rotates to match gravity)
+  ctx.translate(W/2 + sx - cx, H/2 + sy - cy);
+  const RV = Math.max(W, H) / 2 + TS;        // view radius
 
   // dark frame beyond the level border so rotation never shows raw void
   {
@@ -942,7 +941,7 @@ function drawHUD(){
   ctx.strokeStyle = COL.ink; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(dx, dy, 14, 0, 7); ctx.stroke();
   ctx.fillStyle = COL.blood;
-  ctx.save(); ctx.translate(dx, dy); ctx.rotate(gAng); // world horizon
+  ctx.save(); ctx.translate(dx, dy); ctx.rotate(Math.atan2(gDir.x, -gDir.y)); // falling needle + horizon
   ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(4, -5); ctx.lineTo(-4, -5); ctx.closePath(); ctx.fill();
   ctx.strokeStyle = COL.ink; ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.moveTo(-11, 0); ctx.lineTo(11, 0); ctx.stroke(); // horizon
