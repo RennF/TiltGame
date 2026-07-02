@@ -996,7 +996,13 @@ document.getElementById('startBtn').addEventListener('click', () => {
   hookMotion();
   // go fullscreen + lock landscape (Android needs fullscreen first)
   const el = document.documentElement;
-  const lock = () => { try { screen.orientation.lock('landscape').catch(()=>{}); } catch(e){} };
+  const lock = () => { try {
+    // lock to ONE landscape variant (whichever the phone is in now) so a
+    // 180-degree tilt never triggers an OS screen flip mid-run
+    const cur = (screen.orientation && screen.orientation.type) || '';
+    const t = cur === 'landscape-secondary' ? 'landscape-secondary' : 'landscape-primary';
+    screen.orientation.lock(t).catch(()=>{});
+  } catch(e){} };
   if (el.requestFullscreen) el.requestFullscreen().then(lock).catch(lock); else lock();
   document.getElementById('overlay').classList.add('hidden');
   document.getElementById('rot').style.display = 'flex';
