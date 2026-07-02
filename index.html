@@ -692,13 +692,8 @@ function stepEnemies(dt){
 /* ---------------- camera & render ---------------- */
 const cam = { x:SPAWN0.x, y:SPAWN0.y };
 function draw(){
-  // camera
-  const lookX = P.x + P.vx * .14, lookY = P.y + P.vy * .14;
-  cam.x += (lookX - cam.x) * .10; cam.y += (lookY - cam.y) * .10;
-  const worldW = MW * TS, worldH = MH * TS;
-  const clampCam = (v, half, size) => size <= half * 2 ? size / 2 : Math.max(half, Math.min(size - half, v));
-  const cx = clampCam(cam.x, W / 2, worldW);
-  const cy = clampCam(cam.y, H / 2, worldH);
+  // camera: hard-locked to the player, dead center
+  const cx = P.x, cy = P.y;
   const sx = (shake > 0 ? (Math.random()-.5) * shake : 0);
   const sy = (shake > 0 ? (Math.random()-.5) * shake : 0);
   shake = Math.max(0, shake - .8);
